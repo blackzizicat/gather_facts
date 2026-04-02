@@ -22,6 +22,10 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'SilentlyContinue'
 
+# 日本語Windowsの外部コマンド出力（CP932/Shift-JIS）を正しく読み取る
+# PS 5.1 ではデフォルトが CP932 なので変更不要だが、PS 7+ は UTF-8 がデフォルトのため明示設定する
+[Console]::OutputEncoding = [System.Text.Encoding]::GetEncoding(932)
+
 # ─────────────────────────────────────────────
 # 初期化
 # ─────────────────────────────────────────────
@@ -288,7 +292,8 @@ Write-Step 5 "パッケージマネージャー"
 $pkgLines = @()
 
 # winget
-$wingetPath = (Get-Command winget -ErrorAction SilentlyContinue)?.Source
+$wingetCmd  = Get-Command winget -ErrorAction SilentlyContinue
+$wingetPath = if ($wingetCmd) { $wingetCmd.Source } else { $null }
 if ($wingetPath) {
     $pkgLines += "=== winget list ==="
     $pkgLines += (winget list --accept-source-agreements 2>&1)
