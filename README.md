@@ -145,5 +145,39 @@
 .\Collect-WindowsEnv.ps1 -OutputPath "D:\EnvBackup"
 ```
 
+## 実行ポリシーエラーの回避方法
+
+スクリプト実行時に以下のエラーが出る場合:
+```
+このシステムではスクリプトの実行が無効になっているため...
+```
+
+### 方法1: `-ExecutionPolicy Bypass` を付けて実行（推奨）
+
+システムの設定を変更せず、このスクリプトの実行時のみポリシーを一時的に回避します。
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\Collect-WindowsEnv.ps1
+```
+
+### 方法2: 現在のセッションのみポリシーを変更
+
+PowerShell ウィンドウを閉じると元に戻ります。
+
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process
+.\Collect-WindowsEnv.ps1
+```
+
+### 方法3: ユーザー単位でポリシーを変更（管理者権限不要）
+
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+.\Collect-WindowsEnv.ps1
+```
+
+> **注意:** `Scope CurrentUser` の変更は現在のユーザーに永続的に適用されます。
+> 不要になった場合は `Set-ExecutionPolicy -ExecutionPolicy Undefined -Scope CurrentUser` で元に戻してください。
+
 出力先に `WindowsEnvAudit_YYYYMMDD_HHMMSS` フォルダが作成され、
 カテゴリごとに JSON / テキストファイルが保存されます。

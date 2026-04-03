@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     Windows 11 環境を一から再構築するための設定情報を網羅的に収集する
@@ -296,7 +296,10 @@ $wingetCmd  = Get-Command winget -ErrorAction SilentlyContinue
 $wingetPath = if ($wingetCmd) { $wingetCmd.Source } else { $null }
 if ($wingetPath) {
     $pkgLines += "=== winget list ==="
+    # winget は UTF-8 で出力するため一時的に OutputEncoding を切り替える
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
     $pkgLines += (winget list --accept-source-agreements 2>&1)
+    [Console]::OutputEncoding = [System.Text.Encoding]::GetEncoding(932)
     $pkgLines += ""
 } else {
     $pkgLines += "=== winget: 未インストール ==="
@@ -333,7 +336,8 @@ Write-Step 6 "開発ツール・ランタイム"
 
 function Get-ToolVersion {
     param([string]$cmd, [string]$args = "--version")
-    if (Get-Command $cmd -ErrorAction SilentlyContinue) {
+    $cmdInfo = Get-Command $cmd -ErrorAction SilentlyContinue
+    if ($cmdInfo -and $cmdInfo.Source -notlike "*WindowsApps*") {
         $v = (& $cmd $args 2>&1) | Select-Object -First 1
         return $v -replace "`r`n|`n", ""
     }
@@ -1018,15 +1022,19 @@ using System.Runtime.InteropServices;
 public class ScreenCapHelper {
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+    [DllImport("user32.dll")] public static extern int GetSystemMetrics(int nIndex);
 }
 "@ -ErrorAction SilentlyContinue
 
 function Save-Screenshot {
     param([string]$filepath)
-    $bounds  = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-    $bitmap  = New-Object System.Drawing.Bitmap($bounds.Width, $bounds.Height)
-    $g       = [System.Drawing.Graphics]::FromImage($bitmap)
-    $g.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+    [ScreenCapHelper]::SetProcessDPIAware() | Out-Null
+    $width  = [ScreenCapHelper]::GetSystemMetrics(0)  # SM_CXSCREEN (物理ピクセル)
+    $height = [ScreenCapHelper]::GetSystemMetrics(1)  # SM_CYSCREEN (物理ピクセル)
+    $bitmap = New-Object System.Drawing.Bitmap($width, $height)
+    $g      = [System.Drawing.Graphics]::FromImage($bitmap)
+    $g.CopyFromScreen(0, 0, 0, 0, [System.Drawing.Size]::new($width, $height))
     $bitmap.Save($filepath, [System.Drawing.Imaging.ImageFormat]::Png)
     $g.Dispose(); $bitmap.Dispose()
 }
