@@ -2,6 +2,7 @@
 
 ## 目的
 現在のWindows 11環境を一から再構築できるよう、設定・構成情報を網羅的に収集する。
+組織管理下のマシンにおける制御・制限設定の把握も目的に含む。
 
 ---
 
@@ -12,126 +13,217 @@
 - コンピュータ名・ワークグループ/ドメイン
 - ハードウェア構成（CPU、RAM、GPU、マザーボード）
 - BIOS/UEFI 情報（バージョン、セキュアブート設定）
-- ディスク構成（パーティション、ファイルシステム）
 - インストール日時
 
-### 2. インストール済みソフトウェア
+### 2. ディスク・ストレージ
+- **物理ディスク一覧**（内蔵・外付けHDD/SSD・USBストレージ含む）
+  - ディスクモデル・容量・インターフェース種別（SATA/NVMe/USB等）・シリアル番号
+  - `Get-Disk` 優先、失敗時は WMI (`Win32_DiskDrive`) フォールバック
+  - フォールバック時も WMI アソシエーションでパーティション・ボリューム情報を取得
+- **パーティション情報**（ドライブレター・ファイルシステム・サイズ・空き容量）
+- **論理ドライブ一覧**（全ドライブレター・DriveType・容量・空き容量・使用率）
+
+### 3. インストール済みソフトウェア
 - Win32 アプリ（Add/Remove Programs 相当）
 - MSI インストーラー直接インストール（ProductCode・UpgradeCode 付き詳細）
 - ポータブルアプリ（インストーラーなし・EXE 直置き）のスキャン
   - スキャン対象: Program Files / Program Files (x86) / AppData\Local\Programs / デスクトップ / ダウンロード / ドキュメント / PortableApps
   - Win32 登録済みアプリとの照合結果（`IsRegistered` フラグ）を付与
 - Microsoft Store アプリ (AppX/MSIX)
-- winget パッケージ一覧
+- winget パッケージ一覧（プログレスバー表示行を除去して記録）
 - Chocolatey パッケージ一覧（インストール済みの場合）
 - Scoop パッケージ一覧（インストール済みの場合）
 
-### 3. 開発ツール・ランタイム
+### 4. 開発ツール・ランタイム
 - .NET ランタイム・SDK バージョン
 - Node.js / npm バージョン・グローバルパッケージ
 - Python バージョン・pip パッケージ
 - Java / JDK バージョン
 - Go / Rust / Ruby バージョン
 - Git 設定（グローバル config）
-- Docker / WSL2 設定
-- WSL ディストリビューション一覧
+- Docker 設定
 - Visual Studio Code 拡張機能
-- Visual Studio インストール済みコンポーネント
 
-### 4. Windows 機能・オプション機能
-- Windows オプション機能（Hyper-V、WSL、IIS 等）
+### 5. Windows 機能・オプション機能
+- Windows オプション機能（Hyper-V、IIS 等）
 - Windows Capabilities
-- Windows Server Features（サーバーの場合）
+- PowerShell インストール済みモジュール
 
-### 5. サービス
+### 6. サービス
 - 実行中・停止中のサービス一覧
 - スタートアップの種類（自動/手動/無効）
-- 非標準サービス（Windows 標準以外）
+- サービスの実行パス・実行アカウント
 
-### 6. ネットワーク設定
-- ネットワークアダプター一覧・設定（IP/サブネット/ゲートウェイ/DNS）
-- Wi-Fi プロファイル（SSID 一覧）
+### 7. ネットワーク設定
+- ネットワークアダプター一覧・設定（IP/サブネット/ゲートウェイ/DNS/IPv6）
+- Wi-Fi プロファイル（SSID 一覧、パスワード除く）
 - hosts ファイル
 - プロキシ設定
-- ファイアウォールプロファイル設定
+- **ファイアウォールプロファイル**（ドメイン/プライベート/パブリック各プロファイルのON/OFF・既定動作）
 - ファイアウォールカスタムルール（インバウンド/アウトバウンド）
 
-### 7. ユーザー・セキュリティ設定
-- ローカルユーザーアカウント一覧
+### 8. セキュリティソフト・防御設定
+- **登録済みセキュリティ製品**（Windows SecurityCenter2 WMI）
+  - サードパーティ製 AV・ファイアウォール・スパイウェア対策ソフトの有無・有効状態・定義最新状態
+- **Windows Defender / Microsoft Defender Antivirus ステータス**（`Get-MpComputerStatus`）
+  - リアルタイム保護・動作監視・Tamper Protection 等の有効/無効
+  - エンジンバージョン・定義バージョン・最終更新日
+  - 脅威数・検疫数・フルスキャン/クイックスキャン実施日時
+- **Windows Defender 設定**（`Get-MpPreference`）
+  - 除外設定（パス・拡張子・プロセス・IPアドレス）
+  - Attack Surface Reduction (ASR) ルール一覧
+  - クラウド保護（MAPS）レベル・サンプル送信設定
+  - ネットワーク保護・PUA 保護設定
+  - スキャンスケジュール
+- **Microsoft Defender for Endpoint (MDE) オンボーディング状態**
+  - `Sense`/`MsSense` サービスの稼働状態
+  - オンボーディング状態（OnboardingState）・組織ID（OrgId）・最終接続時刻
+
+### 9. ユーザー・セキュリティ設定
+- ローカルユーザーアカウント一覧（SID・有効状態・最終ログオン等）
 - ローカルグループ・メンバーシップ
 - 環境変数（ユーザー/システム）
 - UAC 設定レベル
-- BitLocker 状態
-- Windows Defender / セキュリティセンター設定
-- 監査ポリシー
+- BitLocker 状態（管理者権限時）
 
-### 8. スタートアップ・スケジュールタスク
+### 10. 組織管理・ユーザー初期化設定
+- 全ユーザープロファイル一覧（ローカル/ローミング/必須プロファイル検出）
+- 自動ログイン設定（Winlogon: AutoAdminLogon・Shell・Userinit）
+- ユーザーごとの詳細（デスクトップファイル・スタートアップ・Run レジストリ）
+- **GPO ログオン・ログオフ・起動・シャットダウンスクリプト（コンピューター側）**
+- **ユーザー側 GPO ログオン・ログオフスクリプト（HKCU 側）**
+- **フォルダリダイレクト設定**（デスクトップ・ドキュメント等のネットワーク転送先）
+- **デフォルトユーザープロファイルの状態**（NTUSER.DAT 更新日・デスクトップ内容・Run レジストリ）
+- **ドメインアカウントのログオンスクリプトパス**（`net user` 経由）
+- **プロファイルの上書きポリシー**（DeleteCachedCopies・CleanupProfiles 等）
+- UWF (Unified Write Filter) 状態（キオスク・共用PC での毎回リセット設定）
+- 自動ログイン設定（GPO ログオン・ログオフスクリプト経由）
+
+### 11. スタートアップ・スケジュールタスク
 - スタートアップアプリ（レジストリ Run/RunOnce・スタートアップフォルダ）
-- タスクスケジューラ登録タスク（カスタムタスク）
+- タスクスケジューラ登録タスク（非 Microsoft タスクのみ）
 
-### 9. 電源・パフォーマンス設定
-- 電源プラン（アクティブ・全プラン設定）
-- スリープ・休止設定
+### 12. 電源・パフォーマンス設定
+- 電源プラン（アクティブ・全プラン設定詳細）
 - 仮想メモリ（ページファイル）設定
-- 視覚効果設定
 
-### 10. 地域・言語・入力設定
+### 13. 地域・言語・入力設定
 - タイムゾーン
 - 地域・ロケール設定
-- インストール済み言語パック
 - キーボードレイアウト・入力メソッド（IME）
 
-### 11. ディスプレイ・UI 設定
-- 解像度・リフレッシュレート
+### 14. ディスプレイ設定
+- 解像度・リフレッシュレート・ビット深度
 - DPI スケーリング
-- 夜間モード設定
-- タスクバー設定
-- スタートメニュー設定
 
-### 12. ファイルシステム・共有設定
-- 共有フォルダ一覧
-- ドライブのマッピング（ネットワークドライブ）
-- ジャンクション・シンボリックリンク
-- NTFS 特殊アクセス権（重要フォルダ）
+### 15. ファイルシステム・共有設定
+- 共有フォルダ一覧（隠し共有除く）
+- **ネットワークドライブ一覧**（4手段で収集）
+  - `Get-PSDrive`（現在マウント中）
+  - `Win32_MappedLogicalDisk`（WMI）
+  - `HKCU:\Network`（永続マップのレジストリ）
+  - `net use` コマンド
+  - 0件の場合はエクスプローラー「PC」のスクリーンショットを自動取得
 
-### 13. ドライバー
-- インストール済みデバイスドライバー一覧
-- 署名なし・問題のあるドライバー
+### 16. ドライバー
+- インストール済みデバイスドライバー一覧（バージョン・署名状態・製造元）
 
-### 14. 証明書
-- 個人用・信頼済みルート証明書（カスタム追加分）
-
-### 15. レジストリ（重要箇所）
-- 自動起動キー（HKLM/HKCU Run）
-- デフォルトプログラム・ファイル関連付け
-- 環境変数（レジストリ）
-- ポリシー設定キー
-
-### 16. シェル・ターミナル設定
-- デフォルトシェル設定
-- Windows Terminal profiles.json
-- PowerShell プロファイル内容
-- PowerShell インストール済みモジュール
-- エイリアス・関数（PowerShell プロファイル）
-
-### 17. フォント
+### 17. フォント・プリンター
 - インストール済みフォント一覧
+- インストール済みプリンター（ドライバー・ポート・既定設定）
 
-### 18. プリンター・デバイス
-- インストール済みプリンター
-- デフォルトプリンター
+### 18. 証明書
+- ローカルマシン・現在ユーザーの証明書ストア（My・Root）
 
-### 19. ポリシー設定
-- GPO 適用結果テキスト（`gpresult /r`）
+### 19. シェル・ターミナル設定
+- PowerShell プロファイル内容（全スコープ）
+- Windows Terminal settings.json
+- シェル・エクスプローラー設定（デフォルトブラウザ・隠しファイル表示等）
+
+### 20. ポリシー設定
+- GPO 適用結果テキスト（`gpresult /r`、Unicode出力で文字化け防止）
 - GPO 適用結果 HTML 詳細レポート（`gpresult /h`）
 - レジストリポリシーキー値（`HKLM/HKCU:\SOFTWARE\Policies\`・`...\CurrentVersion\Policies\`）
 - 監査ポリシー（`auditpol /get /category:*`）
 - パスワード・アカウントロックアウトポリシー（`net accounts`）
 - ローカルセキュリティポリシー全体（`secedit /export`、管理者権限時のみ）
 
-### 20. スクリーンショット
+### 21. スクリーンショット
 - スタートメニューを開いた状態のデスクトップ
 - 設定アプリを全画面で開いた状態
+- ネットワークドライブ未検出時: エクスプローラー「PC」画面
+
+---
+
+## 出力ファイル一覧
+
+| ファイル名 | 内容 |
+|-----------|------|
+| `00_INDEX.md` | 収集結果のインデックス |
+| `01_system_info.json` | OS・CPU・GPU・BIOS・マザーボード情報 |
+| `02_disk_partitions.json` | 物理ディスク・パーティション情報 |
+| `02b_logical_disks.json` | 論理ドライブ一覧（容量・空き容量・使用率） |
+| `03_installed_apps_win32.json` | Win32 アプリ一覧 |
+| `03b_installed_apps_msi.json` | MSI インストールアプリ詳細 |
+| `03c_portable_apps_scan.json` | ポータブルアプリスキャン結果 |
+| `04_installed_apps_store.json` | Store アプリ (AppX/MSIX) |
+| `05_package_managers.txt` | winget / Chocolatey / Scoop パッケージ一覧 |
+| `06_dev_tools.json` | 開発ツール・ランタイムバージョン |
+| `06b_vscode_extensions.txt` | VSCode 拡張機能一覧 |
+| `06d_powershell_modules.json` | PowerShell インストール済みモジュール |
+| `07_windows_optional_features.json` | Windows オプション機能 |
+| `07b_windows_capabilities.json` | Windows Capabilities |
+| `08_services.json` | サービス一覧 |
+| `09_network_adapters.json` | ネットワークアダプター・IP設定 |
+| `09b_hosts_file.txt` | hosts ファイル |
+| `09c_proxy_settings.json` | プロキシ設定 |
+| `09d_wifi_profiles.txt` | Wi-Fi プロファイル |
+| `09e_firewall_rules_custom.json` | ファイアウォールカスタムルール |
+| `09f_firewall_profiles.json` | ファイアウォールプロファイル（ドメイン/プライベート/パブリック） |
+| `09g_security_products.json` | 登録済みセキュリティ製品（AV・FW・AS） |
+| `09h_defender_status.json` | Windows Defender ステータス |
+| `09i_defender_preferences.json` | Windows Defender 設定・除外・ASRルール |
+| `09j_defender_endpoint.json` | Microsoft Defender for Endpoint 状態 |
+| `10_local_users.json` | ローカルユーザー一覧 |
+| `10b_local_groups.json` | ローカルグループ・メンバー |
+| `10c_environment_variables.json` | 環境変数 |
+| `10d_uac_settings.json` | UAC 設定 |
+| `10e_bitlocker.json` | BitLocker 状態 |
+| `10f_user_profiles.json` | 全ユーザープロファイル一覧 |
+| `10g_autologin_settings.json` | 自動ログイン・Winlogon 設定 |
+| `10h_per_user_details.json` | ユーザーごとのデスクトップ・スタートアップ・Run |
+| `10i_gpo_logon_scripts.json` | GPO ログオン/ログオフスクリプト（コンピューター側） |
+| `10i2_user_gpo_logon_scripts.json` | GPO ログオン/ログオフスクリプト（ユーザー側 HKCU） |
+| `10i3_folder_redirection.json` | フォルダリダイレクト設定 |
+| `10i4_default_user_profile.json` | デフォルトユーザープロファイル状態 |
+| `10i5_domain_logon_script.json` | ドメインアカウントのログオンスクリプトパス |
+| `10i6_profile_policy.json` | プロファイルの上書きポリシー |
+| `10j_uwf_status.txt` | UWF (Unified Write Filter) 状態 |
+| `11_startup_registry.json` | スタートアップ（レジストリ Run/RunOnce） |
+| `11b_startup_folders.json` | スタートアップフォルダ |
+| `11c_scheduled_tasks.json` | スケジュールタスク（非 Microsoft） |
+| `12_power_settings.txt` | 電源プラン設定 |
+| `12b_virtual_memory.json` | 仮想メモリ設定 |
+| `13_locale_language.json` | 地域・言語・入力設定 |
+| `14_display_settings.json` | ディスプレイ設定・DPI |
+| `15_shared_folders.json` | 共有フォルダ一覧 |
+| `15b_network_drives.json` | ネットワークドライブ一覧 |
+| `15c_screenshot_explorer_pc.png` | エクスプローラー「PC」スクリーンショット（ネットワークドライブ未検出時のみ） |
+| `16_drivers.json` | デバイスドライバー一覧 |
+| `17_fonts.json` | フォント一覧 |
+| `17b_printers.json` | プリンター一覧 |
+| `18_powershell_profiles.txt` | PowerShell プロファイル内容 |
+| `18b_windows_terminal_settings.json` | Windows Terminal 設定 |
+| `18c_shell_settings.json` | シェル・エクスプローラー設定 |
+| `18d_certificates.json` | 証明書一覧 |
+| `19_gpresult.txt` | GPO 適用結果（テキスト） |
+| `19b_gpresult.html` | GPO 適用結果（HTML 詳細） |
+| `19c_registry_policies.json` | レジストリポリシーキー値 |
+| `19d_audit_policy.txt` | 監査ポリシー |
+| `19e_account_policy.txt` | アカウント・ロックアウトポリシー |
+| `19f_local_security_policy.inf` | ローカルセキュリティポリシー全体 |
+| `20_screenshot_startmenu.png` | スタートメニュースクリーンショット |
+| `20b_screenshot_settings.png` | 設定アプリスクリーンショット |
 
 ---
 
@@ -181,3 +273,9 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 
 出力先に `WindowsEnvAudit_YYYYMMDD_HHMMSS` フォルダが作成され、
 カテゴリごとに JSON / テキストファイルが保存されます。
+
+## 注意事項
+
+- **管理者権限推奨**: BitLocker・ファイアウォールルール・secedit・デフォルトユーザープロファイルのレジストリハイブ読み取りには管理者権限が必要
+- **ドメイン参加マシン**: GPO 情報・ドメインログオンスクリプト・フォルダリダイレクト等の組織管理情報が追加で取得される
+- **セキュリティ情報**: MDE オンボーディング状態・Defender 設定・ASR ルール等はセキュリティ担当者向けの情報を含む

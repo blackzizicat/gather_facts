@@ -50,7 +50,17 @@ function Write-Step {
 function Save-Json {
     param([string]$filename, $data)
     $path = Join-Path $outDir $filename
-    $data | ConvertTo-Json -Depth 10 | Set-Content -Path $path -Encoding UTF8
+    # @() | ConvertTo-Json はパイプラインが空になりファイルが作成されないため明示的に処理
+    $json = if ($null -eq $data) {
+        'null'
+    } elseif ($data -is [System.Collections.IEnumerable] -and -not ($data -is [string])) {
+        $arr = @($data)
+        if ($arr.Count -eq 0) { '[]' } else { $arr | ConvertTo-Json -Depth 10 }
+    } else {
+        $data | ConvertTo-Json -Depth 10
+    }
+    if ($null -eq $json) { $json = '[]' }
+    $json | Set-Content -Path $path -Encoding UTF8
     return $path
 }
 
@@ -71,6 +81,36 @@ function Append-Index {
 function Try-Command {
     param([scriptblock]$sb, $fallback = $null)
     try { & $sb } catch { $fallback }
+}
+
+# スクリーンショット用アセンブリ・型（セクション15以降で使用するため先行ロード）
+Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+Add-Type -AssemblyName System.Drawing        -ErrorAction SilentlyContinue
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class ScreenCapHelper {
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+    [DllImport("user32.dll")] public static extern int GetSystemMetrics(int nIndex);
+}
+"@ -ErrorAction SilentlyContinue
+
+function Save-Screenshot {
+    param([string]$filepath)
+    try {
+        [ScreenCapHelper]::SetProcessDPIAware() | Out-Null
+        $width  = [ScreenCapHelper]::GetSystemMetrics(0)
+        $height = [ScreenCapHelper]::GetSystemMetrics(1)
+        $bitmap = New-Object System.Drawing.Bitmap($width, $height)
+        $g      = [System.Drawing.Graphics]::FromImage($bitmap)
+        $g.CopyFromScreen(0, 0, 0, 0, [System.Drawing.Size]::new($width, $height))
+        $bitmap.Save($filepath, [System.Drawing.Imaging.ImageFormat]::Png)
+        $g.Dispose(); $bitmap.Dispose()
+    } catch {
+        Write-Warning "スクリーンショット取得失敗: $_"
+    }
 }
 
 # ─────────────────────────────────────────────
@@ -144,34 +184,93 @@ Append-Index "01. システム基本情報" $f
 # ─────────────────────────────────────────────
 Write-Step 2 "ディスク・パーティション"
 
-$disks = Get-Disk | ForEach-Object {
-    $disk = $_
-    $parts = Get-Partition -DiskNumber $disk.Number -ErrorAction SilentlyContinue
-    [ordered]@{
-        DiskNumber       = $disk.Number
-        FriendlyName     = $disk.FriendlyName
-        SizeGB           = [math]::Round($disk.Size / 1GB, 2)
-        PartitionStyle   = $disk.PartitionStyle
-        BusType          = $disk.BusType
-        MediaType        = $disk.MediaType
-        OperationalStatus= $disk.OperationalStatus
-        Partitions       = @($parts | ForEach-Object {
-            $vol = Get-Volume -Partition $_ -ErrorAction SilentlyContinue
+$disks = try {
+    Get-Disk -ErrorAction Stop | ForEach-Object {
+        $disk = $_
+        $parts = Get-Partition -DiskNumber $disk.Number -ErrorAction SilentlyContinue
+        [ordered]@{
+            DiskNumber       = $disk.Number
+            FriendlyName     = $disk.FriendlyName
+            SizeGB           = [math]::Round($disk.Size / 1GB, 2)
+            PartitionStyle   = $disk.PartitionStyle
+            BusType          = $disk.BusType
+            MediaType        = $disk.MediaType
+            OperationalStatus= $disk.OperationalStatus
+            Partitions       = @($parts | ForEach-Object {
+                $vol = Get-Volume -Partition $_ -ErrorAction SilentlyContinue
+                [ordered]@{
+                    PartitionNumber = $_.PartitionNumber
+                    Type            = $_.Type
+                    SizeGB          = [math]::Round($_.Size / 1GB, 2)
+                    DriveLetter     = $_.DriveLetter
+                    IsSystem        = $_.IsSystem
+                    IsBoot          = $_.IsBoot
+                    FileSystem      = $vol.FileSystem
+                    Label           = $vol.FileSystemLabel
+                }
+            })
+        }
+    }
+} catch {
+    # Get-Disk 失敗時は WMI（Win32_DiskDrive）でフォールバック（パーティション情報も取得）
+    Write-Warning "[02] Get-Disk 失敗。WMI から取得します: $_"
+    Get-CimInstance Win32_DiskDrive -ErrorAction SilentlyContinue | ForEach-Object {
+        $drive = $_
+        # Win32_DiskDriveToDiskPartition → Win32_LogicalDiskToPartition で論理ドライブまで辿る
+        $partitions = Get-CimAssociatedInstance -InputObject $drive -ResultClassName Win32_DiskPartition `
+            -ErrorAction SilentlyContinue | ForEach-Object {
+            $part = $_
+            $logicals = Get-CimAssociatedInstance -InputObject $part -ResultClassName Win32_LogicalDisk `
+                -ErrorAction SilentlyContinue
             [ordered]@{
-                PartitionNumber = $_.PartitionNumber
-                Type            = $_.Type
-                SizeGB          = [math]::Round($_.Size / 1GB, 2)
-                DriveLetter     = $_.DriveLetter
-                IsSystem        = $_.IsSystem
-                IsBoot          = $_.IsBoot
-                FileSystem      = $vol.FileSystem
-                Label           = $vol.FileSystemLabel
+                PartitionNumber = $part.Index
+                Type            = $part.Type
+                SizeGB          = [math]::Round($part.Size / 1GB, 2)
+                DriveLetter     = ($logicals | Select-Object -First 1).DeviceID -replace ':',''
+                IsSystem        = $part.BootPartition
+                IsBoot          = $part.PrimaryPartition
+                FileSystem      = ($logicals | Select-Object -First 1).FileSystem
+                Label           = ($logicals | Select-Object -First 1).VolumeName
+                FreeGB          = if ($logicals) { [math]::Round(($logicals | Select-Object -First 1).FreeSpace / 1GB, 2) } else { $null }
             }
-        })
+        }
+        [ordered]@{
+            DiskNumber       = $drive.Index
+            FriendlyName     = $drive.Model
+            SizeGB           = if ($drive.Size) { [math]::Round($drive.Size / 1GB, 2) } else { 0 }
+            PartitionStyle   = $null
+            BusType          = $drive.InterfaceType
+            MediaType        = if ($drive.PSObject.Properties['MediaType'])  { $drive.MediaType }  else { $null }
+            SerialNumber     = if ($drive.PSObject.Properties['SerialNumber']){ $drive.SerialNumber } else { $null }
+            OperationalStatus= $drive.Status
+            Partitions       = @($partitions)
+        }
     }
 }
 $f = Save-Json "02_disk_partitions.json" $disks
 Append-Index "02. ディスク・パーティション" $f
+
+# ─────────────────────────────────────────────
+# 02b. 論理ドライブ一覧（全ドライブレター・空き容量）
+# ─────────────────────────────────────────────
+$logicalDisks = Get-CimInstance Win32_LogicalDisk -ErrorAction SilentlyContinue | ForEach-Object {
+    [ordered]@{
+        DeviceID    = $_.DeviceID
+        DriveType   = switch ($_.DriveType) {
+            0 { 'Unknown' } 1 { 'NoRootDir' } 2 { 'Removable' }
+            3 { 'LocalDisk' } 4 { 'Network' } 5 { 'CDRom' } 6 { 'RAMDisk' }
+            default { "$($_.DriveType)" }
+        }
+        FileSystem  = $_.FileSystem
+        VolumeName  = $_.VolumeName
+        SizeGB      = if ($_.Size) { [math]::Round($_.Size / 1GB, 2) } else { 0 }
+        FreeGB      = if ($_.FreeSpace) { [math]::Round($_.FreeSpace / 1GB, 2) } else { 0 }
+        UsedPercent = if ($_.Size -and $_.Size -gt 0) { [math]::Round((($_.Size - $_.FreeSpace) / $_.Size) * 100, 1) } else { $null }
+        VolumeSerialNumber = $_.VolumeSerialNumber
+    }
+}
+$f = Save-Json "02b_logical_disks.json" $logicalDisks
+Append-Index "02b. 論理ドライブ一覧" $f
 
 # ─────────────────────────────────────────────
 # 03. インストール済みアプリ（Win32）
@@ -298,7 +397,9 @@ if ($wingetPath) {
     $pkgLines += "=== winget list ==="
     # winget は UTF-8 で出力するため一時的に OutputEncoding を切り替える
     [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-    $pkgLines += (winget list --accept-source-agreements 2>&1)
+    $wingetRaw = (winget list --accept-source-agreements 2>&1)
+    # プログレスバー表示行（█▒░ 等のブロック文字を含む行）を除去してから記録
+    $pkgLines += ($wingetRaw | Where-Object { $_ -notmatch '[█▒░]' })
     [Console]::OutputEncoding = [System.Text.Encoding]::GetEncoding(932)
     $pkgLines += ""
 } else {
@@ -417,18 +518,6 @@ if (Get-Command code -ErrorAction SilentlyContinue) {
     Append-Index "06b. VSCode 拡張機能" $f
 }
 
-# WSL
-if (Get-Command wsl -ErrorAction SilentlyContinue) {
-    $wslInfo = @()
-    $wslInfo += "=== WSL --list --verbose ==="
-    $wslInfo += (wsl --list --verbose 2>&1)
-    $wslInfo += ""
-    $wslInfo += "=== WSL --status ==="
-    $wslInfo += (wsl --status 2>&1)
-    $f = Save-Text "06c_wsl.txt" $wslInfo
-    Append-Index "06c. WSL ディストリビューション" $f
-}
-
 # PowerShell モジュール
 $psModules = Get-Module -ListAvailable | Select-Object Name, Version, ModuleType, Path |
     Sort-Object Name | ForEach-Object {
@@ -481,23 +570,29 @@ Append-Index "08. サービス" $f
 Write-Step 9 "ネットワーク設定"
 
 # アダプターと IP 設定
-$netAdapters = Get-NetAdapter | Where-Object { $_.Status -ne 'Not Present' } | ForEach-Object {
-    $adapter = $_
-    $ipConfig = Get-NetIPConfiguration -InterfaceIndex $adapter.InterfaceIndex -ErrorAction SilentlyContinue
-    $dnsServers = (Get-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue).ServerAddresses
-    [ordered]@{
-        Name            = $adapter.Name
-        InterfaceAlias  = $adapter.InterfaceAlias
-        InterfaceDescription = $adapter.InterfaceDescription
-        Status          = $adapter.Status.ToString()
-        MacAddress      = $adapter.MacAddress
-        LinkSpeedMbps   = [math]::Round($adapter.LinkSpeed / 1MB, 0)
-        IPv4Address     = @($ipConfig.IPv4Address.IPAddress)
-        IPv4PrefixLength= @($ipConfig.IPv4Address.PrefixLength)
-        DefaultGateway  = @($ipConfig.IPv4DefaultGateway.NextHop)
-        DNSServers      = @($dnsServers)
-        IPv6Address     = @($ipConfig.IPv6Address.IPAddress)
+$netAdapters = try {
+    Get-NetAdapter -ErrorAction Stop | Where-Object { $_.Status -ne 'Not Present' } | ForEach-Object {
+        $adapter = $_
+        $ipConfig = Get-NetIPConfiguration -InterfaceIndex $adapter.InterfaceIndex -ErrorAction SilentlyContinue
+        $dnsServers = (Get-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue).ServerAddresses
+        $linkSpeedMbps = if ($adapter.LinkSpeed -and $adapter.LinkSpeed -gt 0) { [math]::Round($adapter.LinkSpeed / 1MB, 0) } else { 0 }
+        [ordered]@{
+            Name             = $adapter.Name
+            InterfaceAlias   = $adapter.InterfaceAlias
+            InterfaceDescription = $adapter.InterfaceDescription
+            Status           = $adapter.Status.ToString()
+            MacAddress       = $adapter.MacAddress
+            LinkSpeedMbps    = $linkSpeedMbps
+            IPv4Address      = @(if ($ipConfig -and $ipConfig.IPv4Address)        { $ipConfig.IPv4Address.IPAddress })
+            IPv4PrefixLength = @(if ($ipConfig -and $ipConfig.IPv4Address)        { $ipConfig.IPv4Address.PrefixLength })
+            DefaultGateway   = @(if ($ipConfig -and $ipConfig.IPv4DefaultGateway) { $ipConfig.IPv4DefaultGateway.NextHop })
+            DNSServers       = @(if ($dnsServers) { $dnsServers })
+            IPv6Address      = @(if ($ipConfig -and $ipConfig.IPv6Address)        { $ipConfig.IPv6Address.IPAddress })
+        }
     }
+} catch {
+    Write-Warning "[09] Get-NetAdapter 失敗: $_"
+    @()
 }
 $f = Save-Json "09_network_adapters.json" $netAdapters
 Append-Index "09. ネットワークアダプター" $f
@@ -548,6 +643,182 @@ if ($isAdmin) {
     $f = Save-Json "09e_firewall_rules_custom.json" $fwRules
     Append-Index "09e. ファイアウォールカスタムルール" $f
 }
+
+# ─────────────────────────────────────────────
+# 09f. ファイアウォールプロファイル（各プロファイルの有効/無効）
+# ─────────────────────────────────────────────
+$fwProfiles = try {
+    Get-NetFirewallProfile -ErrorAction Stop | ForEach-Object {
+        [ordered]@{
+            Name                  = $_.Name
+            Enabled               = $_.Enabled.ToString()
+            DefaultInboundAction  = $_.DefaultInboundAction.ToString()
+            DefaultOutboundAction = $_.DefaultOutboundAction.ToString()
+            LogAllowed            = $_.LogAllowed.ToString()
+            LogBlocked            = $_.LogBlocked.ToString()
+            LogFileName           = $_.LogFileName
+            LogMaxSizeKilobytes   = $_.LogMaxSizeKilobytes
+        }
+    }
+} catch { @() }
+$f = Save-Json "09f_firewall_profiles.json" $fwProfiles
+Append-Index "09f. ファイアウォールプロファイル" $f
+
+# ─────────────────────────────────────────────
+# 09g. 登録済みセキュリティ製品 (SecurityCenter2 WMI)
+#      Windows セキュリティセンターに登録されたAV・FW・AS製品一覧
+# ─────────────────────────────────────────────
+function ConvertTo-SecurityProductState {
+    # productState の16進数フィールドを解読する
+    # 上位バイト: 0x10=有効, 0x11=無効
+    # 中位バイト: 0x00=最新, 0x10=期限切れ
+    param([int]$state)
+    $enabled  = (($state -band 0x1000) -ne 0)
+    $upToDate = (($state -band 0x0010) -eq 0)
+    "$state (有効:$enabled / 定義最新:$upToDate)"
+}
+$secProducts = [ordered]@{
+    AntiVirus = @(
+        Get-CimInstance -Namespace 'root/SecurityCenter2' -ClassName AntiVirusProduct -ErrorAction SilentlyContinue |
+        ForEach-Object {
+            [ordered]@{
+                Name         = $_.displayName
+                InstanceGuid = $_.instanceGuid
+                ExePath      = $_.pathToSignedProductExe
+                ProductState = ConvertTo-SecurityProductState ([int]$_.productState)
+            }
+        }
+    )
+    Firewall = @(
+        Get-CimInstance -Namespace 'root/SecurityCenter2' -ClassName FirewallProduct -ErrorAction SilentlyContinue |
+        ForEach-Object {
+            [ordered]@{
+                Name         = $_.displayName
+                InstanceGuid = $_.instanceGuid
+                ExePath      = $_.pathToSignedProductExe
+                ProductState = ConvertTo-SecurityProductState ([int]$_.productState)
+            }
+        }
+    )
+    AntiSpyware = @(
+        Get-CimInstance -Namespace 'root/SecurityCenter2' -ClassName AntiSpywareProduct -ErrorAction SilentlyContinue |
+        ForEach-Object {
+            [ordered]@{
+                Name         = $_.displayName
+                InstanceGuid = $_.instanceGuid
+                ExePath      = $_.pathToSignedProductExe
+                ProductState = ConvertTo-SecurityProductState ([int]$_.productState)
+            }
+        }
+    )
+}
+$f = Save-Json "09g_security_products.json" $secProducts
+Append-Index "09g. 登録済みセキュリティ製品 (SecurityCenter2)" $f
+
+# ─────────────────────────────────────────────
+# 09h. Windows Defender ステータス (Get-MpComputerStatus)
+# ─────────────────────────────────────────────
+$mpStatus = try { Get-MpComputerStatus -ErrorAction Stop } catch { $null }
+$defenderStatus = if ($mpStatus) {
+    [ordered]@{
+        # 保護機能のON/OFF
+        AMServiceEnabled          = $mpStatus.AMServiceEnabled
+        AntivirusEnabled          = $mpStatus.AntivirusEnabled
+        AntispywareEnabled        = $mpStatus.AntispywareEnabled
+        RealTimeProtectionEnabled = $mpStatus.RealTimeProtectionEnabled
+        BehaviorMonitorEnabled    = $mpStatus.BehaviorMonitorEnabled
+        IoavProtectionEnabled     = $mpStatus.IoavProtectionEnabled
+        NISEnabled                = $mpStatus.NISEnabled
+        OnAccessProtectionEnabled = $mpStatus.OnAccessProtectionEnabled
+        TamperProtectionSource    = "$($mpStatus.TamperProtectionSource)"
+        # バージョン・署名
+        AMProductVersion              = $mpStatus.AMProductVersion
+        AMEngineVersion               = $mpStatus.AMEngineVersion
+        AMServiceVersion              = $mpStatus.AMServiceVersion
+        AntivirusSignatureVersion     = $mpStatus.AntivirusSignatureVersion
+        AntispywareSignatureVersion   = $mpStatus.AntispywareSignatureVersion
+        NISSignatureVersion           = $mpStatus.NISSignatureVersion
+        AntivirusSignatureLastUpdated = "$($mpStatus.AntivirusSignatureLastUpdated)"
+        # スキャン履歴
+        FullScanEndTime    = "$($mpStatus.FullScanEndTime)"
+        QuickScanEndTime   = "$($mpStatus.QuickScanEndTime)"
+        # 脅威・検疫
+        QuarantineCount             = $mpStatus.QuarantineCount
+        ThreatCount                 = $mpStatus.ThreatCount
+        DefenderSignaturesOutOfDate = $mpStatus.DefenderSignaturesOutOfDate
+        FullScanRequired            = $mpStatus.FullScanRequired
+        RebootRequired              = $mpStatus.RebootRequired
+        ComputerState               = $mpStatus.ComputerState
+    }
+} else {
+    [ordered]@{ Error = "Get-MpComputerStatus 失敗（Defender 未インストールまたは権限不足）" }
+}
+$f = Save-Json "09h_defender_status.json" $defenderStatus
+Append-Index "09h. Windows Defender ステータス" $f
+
+# ─────────────────────────────────────────────
+# 09i. Windows Defender 設定 (Get-MpPreference)
+#      除外設定・ASRルール・クラウド保護・ネットワーク保護 等
+# ─────────────────────────────────────────────
+$mpPref = try { Get-MpPreference -ErrorAction Stop } catch { $null }
+$defenderPref = if ($mpPref) {
+    [ordered]@{
+        # 除外設定（組織管理で重要）
+        ExclusionPath        = @($mpPref.ExclusionPath)
+        ExclusionExtension   = @($mpPref.ExclusionExtension)
+        ExclusionProcess     = @($mpPref.ExclusionProcess)
+        ExclusionIpAddress   = @($mpPref.ExclusionIpAddress)
+        # リアルタイム保護
+        DisableRealtimeMonitoring   = $mpPref.DisableRealtimeMonitoring
+        DisableBehaviorMonitoring   = $mpPref.DisableBehaviorMonitoring
+        DisableBlockAtFirstSeen     = $mpPref.DisableBlockAtFirstSeen
+        DisableIOAVProtection       = $mpPref.DisableIOAVProtection
+        DisableScriptScanning       = $mpPref.DisableScriptScanning
+        # クラウド保護 (MAPS)
+        MAPSReporting        = "$($mpPref.MAPSReporting)"
+        CloudBlockLevel      = "$($mpPref.CloudBlockLevel)"
+        CloudExtendedTimeout = $mpPref.CloudExtendedTimeout
+        SubmitSamplesConsent = "$($mpPref.SubmitSamplesConsent)"
+        # ネットワーク保護
+        EnableNetworkProtection = "$($mpPref.EnableNetworkProtection)"
+        # PUA 保護
+        PUAProtection        = "$($mpPref.PUAProtection)"
+        # Attack Surface Reduction (ASR) ルール
+        ASR_RuleIds    = @($mpPref.AttackSurfaceReductionRules_Ids)
+        ASR_Actions    = @($mpPref.AttackSurfaceReductionRules_Actions)
+        # スキャンスケジュール
+        ScanScheduleDay  = "$($mpPref.ScanScheduleDay)"
+        ScanScheduleTime = "$($mpPref.ScanScheduleTime)"
+        SignatureScheduleDay = "$($mpPref.SignatureScheduleDay)"
+    }
+} else {
+    [ordered]@{ Error = "Get-MpPreference 失敗（Defender 未インストールまたは権限不足）" }
+}
+$f = Save-Json "09i_defender_preferences.json" $defenderPref
+Append-Index "09i. Windows Defender 設定 (Get-MpPreference)" $f
+
+# ─────────────────────────────────────────────
+# 09j. Microsoft Defender for Endpoint (MDE) オンボーディング状態
+# ─────────────────────────────────────────────
+$mdeStatusReg  = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows Advanced Threat Protection\Status' -ErrorAction SilentlyContinue
+$mdeOnboarding = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows Advanced Threat Protection' -ErrorAction SilentlyContinue
+
+$senseService  = Get-Service -Name 'Sense'   -ErrorAction SilentlyContinue
+$msSenseService= Get-Service -Name 'MsSense' -ErrorAction SilentlyContinue
+
+$mdeInfo = [ordered]@{
+    # サービス状態（Sense = MDE センサー）
+    SenseService   = if ($senseService)   { [ordered]@{ Status=$senseService.Status.ToString();   StartType=$senseService.StartType.ToString() } }   else { $null }
+    MsSenseService = if ($msSenseService) { [ordered]@{ Status=$msSenseService.Status.ToString(); StartType=$msSenseService.StartType.ToString() } } else { $null }
+    # オンボーディング状態（0=未オンボーディング, 1=オンボーディング済み）
+    OnboardingState = $mdeStatusReg.OnboardingState
+    OrgId           = $mdeStatusReg.OrgId
+    SenseId         = $mdeStatusReg.SenseId
+    # 最終ハートビート
+    LastConnected   = "$($mdeStatusReg.LastConnected)"
+}
+$f = Save-Json "09j_defender_endpoint.json" $mdeInfo
+Append-Index "09j. Microsoft Defender for Endpoint (MDE) 状態" $f
 
 # ─────────────────────────────────────────────
 # 10. ユーザー・セキュリティ設定
@@ -619,6 +890,318 @@ if ($isAdmin) {
     $f = Save-Json "10e_bitlocker.json" $bitlocker
     Append-Index "10e. BitLocker" $f
 }
+
+# ─────────────────────────────────────────────
+# 10f. 全ユーザープロファイル一覧
+# ─────────────────────────────────────────────
+$profileListKey = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList'
+$allProfiles = Get-CimInstance Win32_UserProfile -ErrorAction SilentlyContinue | ForEach-Object {
+    $prof   = $_
+    $sid    = $prof.SID
+    $regKey = Get-ItemProperty "$profileListKey\$sid" -ErrorAction SilentlyContinue
+    # mandatory プロファイルはパスが .man で終わるか、CentralProfile が .man
+    $isMandatory = ($prof.LocalPath -match '\.man$') -or ($regKey.CentralProfile -match '\.man$')
+    [ordered]@{
+        LocalPath        = $prof.LocalPath
+        SID              = $sid
+        Loaded           = $prof.Loaded
+        RoamingConfigured= $prof.RoamingConfigured
+        Special          = $prof.Special
+        LastUseTime      = $prof.LastUseTime
+        MandatoryProfile = $isMandatory
+        CentralProfile   = $regKey.CentralProfile
+    }
+}
+$f = Save-Json "10f_user_profiles.json" $allProfiles
+Append-Index "10f. 全ユーザープロファイル一覧" $f
+
+# ─────────────────────────────────────────────
+# 10g. 自動ログイン設定
+# ─────────────────────────────────────────────
+$winlogonKey = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' -ErrorAction SilentlyContinue
+$autoLogin = [ordered]@{
+    AutoAdminLogon    = $winlogonKey.AutoAdminLogon
+    DefaultUserName   = $winlogonKey.DefaultUserName
+    DefaultDomainName = $winlogonKey.DefaultDomainName
+    # パスワードは存在有無のみ記録（平文保存のため値は収集しない）
+    DefaultPassword   = if ($winlogonKey.DefaultPassword) { '*** (設定あり)' } else { $null }
+    ForceAutoLogon    = $winlogonKey.ForceAutoLogon
+    Userinit          = $winlogonKey.Userinit
+    Shell             = $winlogonKey.Shell
+}
+$f = Save-Json "10g_autologin_settings.json" $autoLogin
+Append-Index "10g. 自動ログイン設定 (Winlogon)" $f
+
+# ─────────────────────────────────────────────
+# 10h. ユーザーごとのデスクトップ・スタートアップ・Run レジストリ
+# ─────────────────────────────────────────────
+$perUserDetails = @()
+$allProfiles | Where-Object { $_.LocalPath -and (Test-Path $_.LocalPath) -and -not $_.Special } | ForEach-Object {
+    $userPath = $_.LocalPath
+    $userName = Split-Path $userPath -Leaf
+    $sid      = $_.SID
+
+    # デスクトップ上のファイル・ショートカット一覧
+    $desktopFiles = @()
+    $desktopPath = Join-Path $userPath 'Desktop'
+    if (Test-Path $desktopPath) {
+        $shell = New-Object -ComObject WScript.Shell -ErrorAction SilentlyContinue
+        $desktopFiles = Get-ChildItem $desktopPath -Recurse -Depth 2 -ErrorAction SilentlyContinue | ForEach-Object {
+            $lnkTarget = $null
+            if ($_.Extension -eq '.lnk' -and $shell) {
+                $lnk = Try-Command { $shell.CreateShortcut($_.FullName) } $null
+                $lnkTarget = if ($lnk) { $lnk.TargetPath } else { $null }
+            }
+            [ordered]@{
+                Name           = $_.Name
+                FullPath       = $_.FullName
+                Extension      = $_.Extension
+                LastModified   = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
+                ShortcutTarget = $lnkTarget
+            }
+        }
+    }
+
+    # ユーザースタートアップフォルダ
+    $userStartupFiles = @()
+    $userStartupPath = Join-Path $userPath 'AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup'
+    if (Test-Path $userStartupPath) {
+        $shell2 = New-Object -ComObject WScript.Shell -ErrorAction SilentlyContinue
+        $userStartupFiles = Get-ChildItem $userStartupPath -ErrorAction SilentlyContinue | ForEach-Object {
+            $lnkTarget2 = $null
+            if ($_.Extension -eq '.lnk' -and $shell2) {
+                $lnk2 = Try-Command { $shell2.CreateShortcut($_.FullName) } $null
+                $lnkTarget2 = if ($lnk2) { $lnk2.TargetPath } else { $null }
+            }
+            [ordered]@{
+                Name           = $_.Name
+                FullPath       = $_.FullName
+                ShortcutTarget = $lnkTarget2
+            }
+        }
+    }
+
+    # HKU\<SID> の Run / RunOnce（マウント済みハイブのみ取得可能）
+    $hkuRun = @()
+    foreach ($runKey in @("Run", "RunOnce")) {
+        $keyPath = "Registry::HKU\$sid\SOFTWARE\Microsoft\Windows\CurrentVersion\$runKey"
+        $props = Get-ItemProperty $keyPath -ErrorAction SilentlyContinue
+        if ($props) {
+            $props.PSObject.Properties | Where-Object { $_.Name -notmatch '^PS' } | ForEach-Object {
+                $hkuRun += [ordered]@{ RegistryKey=$runKey; Name=$_.Name; Command=$_.Value }
+            }
+        }
+    }
+
+    $perUserDetails += [ordered]@{
+        UserName         = $userName
+        ProfilePath      = $userPath
+        SID              = $sid
+        Loaded           = $_.Loaded
+        MandatoryProfile = $_.MandatoryProfile
+        DesktopFiles     = @($desktopFiles)
+        StartupFiles     = @($userStartupFiles)
+        StartupRegistry  = @($hkuRun)
+    }
+}
+$f = Save-Json "10h_per_user_details.json" $perUserDetails
+Append-Index "10h. ユーザーごとの詳細（デスクトップ・スタートアップ・Run レジストリ）" $f
+
+# ─────────────────────────────────────────────
+# 10i. GPO ログオン・ログオフ・スタートアップ・シャットダウンスクリプト
+# ─────────────────────────────────────────────
+$gpoScripts = @()
+foreach ($category in @('Logon','Logoff','Startup','Shutdown')) {
+    $gpoPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Group Policy\Scripts\$category"
+    if (-not (Test-Path $gpoPath)) { continue }
+    Get-ChildItem $gpoPath -ErrorAction SilentlyContinue | ForEach-Object {
+        $gpoEntry = $_
+        Get-ChildItem $gpoEntry.PSPath -ErrorAction SilentlyContinue | ForEach-Object {
+            $scriptEntry = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
+            $gpoScripts += [ordered]@{
+                Category   = $category
+                GPO        = $gpoEntry.PSChildName
+                Script     = $scriptEntry.Script
+                Parameters = $scriptEntry.Parameters
+            }
+        }
+    }
+}
+$f = Save-Json "10i_gpo_logon_scripts.json" $gpoScripts
+Append-Index "10i. GPO ログオン・ログオフスクリプト" $f
+
+# ─────────────────────────────────────────────
+# 10i2. ユーザー側 GPO ログオン・ログオフスクリプト（HKCU）
+# ─────────────────────────────────────────────
+$userGpoScripts = @()
+foreach ($category in @('Logon','Logoff')) {
+    $gpoPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Group Policy\Scripts\$category"
+    if (-not (Test-Path $gpoPath)) { continue }
+    Get-ChildItem $gpoPath -ErrorAction SilentlyContinue | ForEach-Object {
+        $gpoEntry = $_
+        Get-ChildItem $gpoEntry.PSPath -ErrorAction SilentlyContinue | ForEach-Object {
+            $scriptEntry = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
+            $userGpoScripts += [ordered]@{
+                Category   = $category
+                GPO        = $gpoEntry.PSChildName
+                Script     = $scriptEntry.Script
+                Parameters = $scriptEntry.Parameters
+            }
+        }
+    }
+}
+$f = Save-Json "10i2_user_gpo_logon_scripts.json" $userGpoScripts
+Append-Index "10i2. ユーザー側 GPO ログオン・ログオフスクリプト (HKCU)" $f
+
+# ─────────────────────────────────────────────
+# 10i3. フォルダリダイレクト
+# ─────────────────────────────────────────────
+$shellFolderKeys = @(
+    'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders',
+    'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders',
+    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders',
+    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders'
+)
+$folderRedirect = [ordered]@{}
+foreach ($key in $shellFolderKeys) {
+    $props = Get-ItemProperty $key -ErrorAction SilentlyContinue
+    if (-not $props) { continue }
+    $label = ($key -replace 'HKCU:\\','User\' -replace 'HKLM:\\','Machine\') -replace '.*\\Explorer\\',''
+    $entries = [ordered]@{}
+    $props.PSObject.Properties | Where-Object { $_.Name -notmatch '^PS' } | ForEach-Object {
+        # ネットワークパス（\\）または環境変数展開後がネットワークパスになるものを優先記録
+        $entries[$_.Name] = $_.Value
+    }
+    $folderRedirect[$label] = $entries
+}
+# グループポリシーによるフォルダリダイレクト設定（ポリシー優先値）
+$fdPolicy = Get-ItemProperty 'HKCU:\Software\Policies\Microsoft\Windows\System\Fdeploy' -ErrorAction SilentlyContinue
+if ($fdPolicy) {
+    $policyEntries = [ordered]@{}
+    $fdPolicy.PSObject.Properties | Where-Object { $_.Name -notmatch '^PS' } | ForEach-Object {
+        $policyEntries[$_.Name] = $_.Value
+    }
+    $folderRedirect['Policy\Fdeploy'] = $policyEntries
+}
+$f = Save-Json "10i3_folder_redirection.json" $folderRedirect
+Append-Index "10i3. フォルダリダイレクト" $f
+
+# ─────────────────────────────────────────────
+# 10i4. デフォルトユーザープロファイルの状態
+# ─────────────────────────────────────────────
+$defaultProfilePath = "$env:SystemDrive\Users\Default"
+$defaultProfileInfo = [ordered]@{
+    Path    = $defaultProfilePath
+    Exists  = (Test-Path $defaultProfilePath)
+    # NTUSER.DAT の更新日（カスタマイズの目安）
+    NtuserDatLastWrite = if (Test-Path "$defaultProfilePath\NTUSER.DAT") {
+        (Get-Item "$defaultProfilePath\NTUSER.DAT" -Force).LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
+    } else { $null }
+    # デスクトップ・スタートアップフォルダのファイル一覧
+    DesktopFiles = @(Get-ChildItem "$defaultProfilePath\Desktop" -ErrorAction SilentlyContinue |
+        Select-Object Name, Extension, LastWriteTime | ForEach-Object {
+            [ordered]@{ Name=$_.Name; Extension=$_.Extension; LastWrite=$_.LastWriteTime.ToString('yyyy-MM-dd') }
+        })
+    StartupFiles = @(Get-ChildItem "$defaultProfilePath\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup" -ErrorAction SilentlyContinue |
+        Select-Object Name | ForEach-Object { $_.Name })
+    # レジストリハイブ内の Run キー（管理者なら読める可能性あり）
+    RunRegistry  = @()
+}
+# デフォルトユーザーのレジストリハイブを一時ロード
+$hiveLoaded = $false
+if ($isAdmin -and (Test-Path "$defaultProfilePath\NTUSER.DAT")) {
+    $tmpHive = 'HKLM:\TempDefaultHive'
+    $ret = reg load 'HKLM\TempDefaultHive' "$defaultProfilePath\NTUSER.DAT" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $hiveLoaded = $true
+        $runProps = Get-ItemProperty "$tmpHive\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -ErrorAction SilentlyContinue
+        if ($runProps) {
+            $runProps.PSObject.Properties | Where-Object { $_.Name -notmatch '^PS' } | ForEach-Object {
+                $defaultProfileInfo.RunRegistry += [ordered]@{ Name=$_.Name; Command=$_.Value }
+            }
+        }
+        [gc]::Collect()
+        reg unload 'HKLM\TempDefaultHive' 2>&1 | Out-Null
+    }
+}
+$f = Save-Json "10i4_default_user_profile.json" $defaultProfileInfo
+Append-Index "10i4. デフォルトユーザープロファイル状態" $f
+
+# ─────────────────────────────────────────────
+# 10i5. ドメインアカウントのログオンスクリプトパス
+# ─────────────────────────────────────────────
+$domainLogonScript = [ordered]@{}
+
+# 現在ログイン中のユーザーの net user 情報
+$netUserLines = (net user $env:USERNAME 2>&1)
+$scriptLine = $netUserLines | Where-Object { $_ -match 'スクリプト|Script' } | Select-Object -First 1
+$domainLogonScript['CurrentUser_NetUser_ScriptPath'] = if ($scriptLine) {
+    ($scriptLine -split '\s{2,}')[-1].Trim()
+} else { $null }
+
+# ドメイン参加の場合は net user /domain も試行
+if ((Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue).PartOfDomain) {
+    $netUserDomainLines = (net user $env:USERNAME /domain 2>&1)
+    $dScriptLine = $netUserDomainLines | Where-Object { $_ -match 'スクリプト|Script' } | Select-Object -First 1
+    $domainLogonScript['CurrentUser_Domain_ScriptPath'] = if ($dScriptLine) {
+        ($dScriptLine -split '\s{2,}')[-1].Trim()
+    } else { $null }
+}
+
+# Netlogon スクリプトフォルダの確認（ドメインコントローラーのNetlogon共有経由）
+$domainLogonScript['NetlogonShare'] = if (Test-Path '\\.\SYSVOL' -ErrorAction SilentlyContinue) { '\\.\SYSVOL' } else { $null }
+
+$f = Save-Json "10i5_domain_logon_script.json" $domainLogonScript
+Append-Index "10i5. ドメインアカウントのログオンスクリプトパス" $f
+
+# ─────────────────────────────────────────────
+# 10i6. プロファイルの上書きポリシー
+# ─────────────────────────────────────────────
+$profilePolicyKeys = @(
+    'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon',
+    'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System',
+    'HKCU:\Software\Policies\Microsoft\Windows\System'
+)
+$profilePolicy = [ordered]@{}
+foreach ($key in $profilePolicyKeys) {
+    $props = Get-ItemProperty $key -ErrorAction SilentlyContinue
+    if (-not $props) { continue }
+    $label = $key -replace 'HKLM:\\','Machine\' -replace 'HKCU:\\','User\'
+    $relevant = [ordered]@{}
+    $interestingNames = @(
+        # ローミングプロファイル関連
+        'DeleteRoamingCache','ProfileDlgTimeOut','SlowLinkTimeOut','SlowLinkUIEnabled',
+        'ExcludeProfileDirs','RoamingProfileSupportEnabled',
+        # ログオフ時にローカルコピーを削除
+        'DeleteCachedCopies','CleanupProfiles',
+        # 必須プロファイル
+        'ForceUnloadHive',
+        # プロファイルパス設定
+        'ProfilesDirectory','DefaultUserProfile','ProfilePath',
+        # グループポリシーによる制御
+        'DisableForceUnload','EnableSlowLinkDetect',
+        # Winlogon
+        'Userinit','Shell','UserInit'
+    )
+    $props.PSObject.Properties | Where-Object { $_.Name -in $interestingNames } | ForEach-Object {
+        $relevant[$_.Name] = $_.Value
+    }
+    if ($relevant.Count -gt 0) { $profilePolicy[$label] = $relevant }
+}
+$f = Save-Json "10i6_profile_policy.json" $profilePolicy
+Append-Index "10i6. プロファイルの上書きポリシー" $f
+
+# ─────────────────────────────────────────────
+# 10j. UWF (Unified Write Filter) 状態
+#      ─ キオスク・共用PC での再ログイン時リセット手段として使われる
+# ─────────────────────────────────────────────
+$uwfLines = @("=== UWF フィルター設定 ===")
+$uwfLines += (uwfmgr.exe filter get-config 2>&1)
+$uwfLines += ""
+$uwfLines += "=== UWF 保護ボリューム ==="
+$uwfLines += (uwfmgr.exe volume get-config all 2>&1)
+$f = Save-Text "10j_uwf_status.txt" $uwfLines
+Append-Index "10j. UWF (Unified Write Filter) 状態" $f
 
 # ─────────────────────────────────────────────
 # 11. スタートアップ・スケジュールタスク
@@ -767,7 +1350,7 @@ public class DisplayHelper {
 }
 "@ -ErrorAction SilentlyContinue
 
-$monitors = Get-CimInstance Win32_VideoController | ForEach-Object {
+$monitors = Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue | ForEach-Object {
     [ordered]@{
         Name                 = $_.Name
         CurrentHorizontalRes = $_.CurrentHorizontalResolution
@@ -775,15 +1358,15 @@ $monitors = Get-CimInstance Win32_VideoController | ForEach-Object {
         CurrentRefreshRate   = $_.CurrentRefreshRate
         BitsPerPixel         = $_.CurrentBitsPerPixel
         DriverVersion        = $_.DriverVersion
-        DriverDate           = $_.DriverDate
+        DriverDate           = if ($_.DriverDate) { $_.DriverDate.ToString('yyyy-MM-dd') } else { $null }
     }
 }
 
 # DPI スケーリング（レジストリから）
 $dpiReg = Get-ItemProperty 'HKCU:\Control Panel\Desktop' -ErrorAction SilentlyContinue
 $displays = [ordered]@{
-    Monitors   = @($monitors)
-    LogPixels  = $dpiReg.LogPixels
+    Monitors       = @($monitors)
+    LogPixels      = $dpiReg.LogPixels
     Win8DpiScaling = $dpiReg.Win8DpiScaling
 }
 $f = Save-Json "14_display_settings.json" $displays
@@ -795,23 +1378,80 @@ Append-Index "14. ディスプレイ設定" $f
 Write-Step 15 "共有・ネットワークドライブ"
 
 # 共有フォルダ
-$shares = Get-SmbShare -ErrorAction SilentlyContinue | Where-Object { $_.Name -notmatch '\$$' } |
-    ForEach-Object {
-        [ordered]@{
-            Name        = $_.Name
-            Path        = $_.Path
-            Description = $_.Description
-            ShareState  = $_.ShareState.ToString()
+$shares = try {
+    Get-SmbShare -ErrorAction Stop | Where-Object { $_.Name -notmatch '\$$' } |
+        ForEach-Object {
+            [ordered]@{
+                Name        = $_.Name
+                Path        = $_.Path
+                Description = $_.Description
+                ShareState  = "$($_.ShareState)"
+            }
         }
-    }
+} catch {
+    Write-Warning "[15] Get-SmbShare 失敗: $_"
+    @()
+}
 $f = Save-Json "15_shared_folders.json" $shares
 Append-Index "15. 共有フォルダ" $f
 
-# ネットワークドライブ
-$netDrives = Get-PSDrive -PSProvider FileSystem | Where-Object { $_.DisplayRoot -match '\\\\' } |
-    ForEach-Object { [ordered]@{ Name=$_.Name; Root=$_.Root; DisplayRoot=$_.DisplayRoot } }
+# ネットワークドライブ（複数手段で収集）
+$netDrives = [System.Collections.Generic.List[object]]::new()
+
+# 手段1: Get-PSDrive（現在マウント中）
+try {
+    Get-PSDrive -PSProvider FileSystem -ErrorAction Stop |
+        Where-Object { $_.DisplayRoot -match '\\\\' } |
+        ForEach-Object {
+            $netDrives.Add([ordered]@{ Source='PSDrive'; DriveLetter=$_.Name; UNCPath=$_.DisplayRoot; Description=$null })
+        }
+} catch {}
+
+# 手段2: WMI Win32_MappedLogicalDisk
+try {
+    Get-CimInstance Win32_MappedLogicalDisk -ErrorAction Stop | ForEach-Object {
+        $letter = $_.Name -replace ':',''
+        if (-not ($netDrives | Where-Object { $_.DriveLetter -eq $letter })) {
+            $netDrives.Add([ordered]@{ Source='WMI'; DriveLetter=$letter; UNCPath=$_.ProviderName; Description=$_.Description })
+        }
+    }
+} catch {}
+
+# 手段3: レジストリ HKCU:\Network（永続マップ）
+try {
+    Get-ChildItem 'HKCU:\Network' -ErrorAction Stop | ForEach-Object {
+        $props = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
+        $letter = $_.PSChildName
+        if (-not ($netDrives | Where-Object { $_.DriveLetter -eq $letter })) {
+            $netDrives.Add([ordered]@{ Source='Registry'; DriveLetter=$letter; UNCPath=$props.RemotePath; Description=$props.UserName })
+        }
+    }
+} catch {}
+
+# 手段4: net use コマンド
+$netUseRaw = (net use 2>&1) | Where-Object { $_ -match 'OK|切断|Disconnected|接続済' }
+foreach ($line in $netUseRaw) {
+    if ($line -match '([A-Z]):.*?(\\\\[^\s]+)') {
+        $letter = $matches[1]; $unc = $matches[2]
+        if (-not ($netDrives | Where-Object { $_.DriveLetter -eq $letter })) {
+            $netDrives.Add([ordered]@{ Source='NetUse'; DriveLetter=$letter; UNCPath=$unc; Description=$null })
+        }
+    }
+}
+
 $f = Save-Json "15b_network_drives.json" $netDrives
 Append-Index "15b. ネットワークドライブ" $f
+
+# ネットワークドライブが0件の場合はエクスプローラー（PC）のスクリーンショットを補完
+if ($netDrives.Count -eq 0) {
+    Write-Host "  -> ネットワークドライブ未検出。エクスプローラーのスクリーンショットを取得します..." -ForegroundColor Yellow
+    $explorerProc = Start-Process explorer.exe -ArgumentList 'shell:::{20D04FE0-3AEA-1069-A2D8-08002B30309D}' -PassThru
+    Start-Sleep -Seconds 2
+    $ssExplorer = Join-Path $outDir "15c_screenshot_explorer_pc.png"
+    Save-Screenshot $ssExplorer
+    Append-Index "15c. エクスプローラー（PC）スクリーンショット" $ssExplorer
+    if ($explorerProc) { Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue; Start-Process explorer.exe }
+}
 
 # ─────────────────────────────────────────────
 # 16. ドライバー
@@ -846,15 +1486,20 @@ $f = Save-Json "17_fonts.json" $fonts
 Append-Index "17. フォント" $f
 
 # プリンター
-$printers = Get-Printer -ErrorAction SilentlyContinue | ForEach-Object {
-    [ordered]@{
-        Name           = $_.Name
-        DriverName     = $_.DriverName
-        PortName       = $_.PortName
-        Shared         = $_.Shared
-        Default        = $_.Default
-        PrinterStatus  = $_.PrinterStatus.ToString()
+$printers = try {
+    Get-Printer -ErrorAction Stop | ForEach-Object {
+        [ordered]@{
+            Name          = $_.Name
+            DriverName    = $_.DriverName
+            PortName      = $_.PortName
+            Shared        = $_.Shared
+            Default       = $_.Default
+            PrinterStatus = "$($_.PrinterStatus)"
+        }
     }
+} catch {
+    Write-Warning "[17b] Get-Printer 失敗: $_"
+    @()
 }
 $f = Save-Json "17b_printers.json" $printers
 Append-Index "17b. プリンター" $f
@@ -938,8 +1583,12 @@ Append-Index "18d. 証明書" $f
 Write-Step 19 "ポリシー設定"
 
 # gpresult テキスト形式（ドメイン参加・非参加どちらでも動作）
+# gpresult は Unicode 出力を行うため、OutputEncoding を Unicode に切り替えて文字化けを防止
 $gpresultLines = @("=== gpresult /r ===")
+$savedGpEnc = [Console]::OutputEncoding
+[Console]::OutputEncoding = [System.Text.Encoding]::Unicode
 $gpresultLines += (gpresult /r 2>&1)
+[Console]::OutputEncoding = $savedGpEnc
 $f = Save-Text "19_gpresult.txt" $gpresultLines
 Append-Index "19. GPO 適用結果（テキスト）" $f
 
@@ -1013,31 +1662,6 @@ if ($isAdmin) {
 # 20. スクリーンショット
 # ─────────────────────────────────────────────
 Write-Step 20 "スクリーンショット"
-
-Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
-Add-Type -AssemblyName System.Drawing        -ErrorAction SilentlyContinue
-Add-Type @"
-using System;
-using System.Runtime.InteropServices;
-public class ScreenCapHelper {
-    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
-    [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
-    [DllImport("user32.dll")] public static extern int GetSystemMetrics(int nIndex);
-}
-"@ -ErrorAction SilentlyContinue
-
-function Save-Screenshot {
-    param([string]$filepath)
-    [ScreenCapHelper]::SetProcessDPIAware() | Out-Null
-    $width  = [ScreenCapHelper]::GetSystemMetrics(0)  # SM_CXSCREEN (物理ピクセル)
-    $height = [ScreenCapHelper]::GetSystemMetrics(1)  # SM_CYSCREEN (物理ピクセル)
-    $bitmap = New-Object System.Drawing.Bitmap($width, $height)
-    $g      = [System.Drawing.Graphics]::FromImage($bitmap)
-    $g.CopyFromScreen(0, 0, 0, 0, [System.Drawing.Size]::new($width, $height))
-    $bitmap.Save($filepath, [System.Drawing.Imaging.ImageFormat]::Png)
-    $g.Dispose(); $bitmap.Dispose()
-}
 
 # スタートメニューを開いた状態のスクリーンショット
 [System.Windows.Forms.SendKeys]::SendWait("^{ESC}")
