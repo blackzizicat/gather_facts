@@ -123,10 +123,13 @@
   - `Win32_MappedLogicalDisk`（WMI）
   - `HKCU:\Network`（永続マップのレジストリ）
   - `net use` コマンド
-  - 0件の場合はエクスプローラー「PC」のスクリーンショットを自動取得
 
 ### 16. ドライバー
 - インストール済みデバイスドライバー一覧（バージョン・署名状態・製造元）
+- **デバイス ハードウェア ID 一覧**（`Win32_PnPEntity` から HardwareID / CompatibleID を取得）
+- **ペンタブレット・ペン入力デバイス詳細**（Wacom / Huion / XP-Pen / Gaomon 等のキーワード・VIDフィルタで絞り込み）
+  - デバイス情報・ドライバー情報の結合
+  - Wacom 関連レジストリキー（型番・設定情報）
 
 ### 17. フォント・プリンター
 - インストール済みフォント一覧
@@ -148,10 +151,13 @@
 - パスワード・アカウントロックアウトポリシー（`net accounts`）
 - ローカルセキュリティポリシー全体（`secedit /export`、管理者権限時のみ）
 
-### 21. スクリーンショット
-- スタートメニューを開いた状態のデスクトップ
-- 設定アプリを全画面で開いた状態
-- ネットワークドライブ未検出時: エクスプローラー「PC」画面
+### 20. スクリプト・バッチファイルの実体収集
+- GPO スクリプトディレクトリのスキャン（Machine/User の Startup・Shutdown・Logon・Logoff）
+- スタートアップフォルダ内のスクリプトファイル
+- GPO スクリプトレジストリ参照先ファイル
+- タスクスケジューラのアクション・引数が参照するスクリプトファイル
+- 収集対象拡張子: `.bat` `.cmd` `.ps1` `.vbs` `.wsf` `.js` `.adm` `.admx`
+- コピー先: `20_scripts/` ディレクトリ（カテゴリプレフィックス付きで格納）
 
 ---
 
@@ -208,8 +214,9 @@
 | `14_display_settings.json` | ディスプレイ設定・DPI |
 | `15_shared_folders.json` | 共有フォルダ一覧 |
 | `15b_network_drives.json` | ネットワークドライブ一覧 |
-| `15c_screenshot_explorer_pc.png` | エクスプローラー「PC」スクリーンショット（ネットワークドライブ未検出時のみ） |
 | `16_drivers.json` | デバイスドライバー一覧 |
+| `16b_device_hardware_ids.json` | デバイス ハードウェア ID 一覧（Win32_PnPEntity） |
+| `16c_pen_tablet_devices.json` | ペンタブレット・ペン入力デバイス詳細（Wacom/Huion 等） |
 | `17_fonts.json` | フォント一覧 |
 | `17b_printers.json` | プリンター一覧 |
 | `18_powershell_profiles.txt` | PowerShell プロファイル内容 |
@@ -222,8 +229,8 @@
 | `19d_audit_policy.txt` | 監査ポリシー |
 | `19e_account_policy.txt` | アカウント・ロックアウトポリシー |
 | `19f_local_security_policy.inf` | ローカルセキュリティポリシー全体 |
-| `20_screenshot_startmenu.png` | スタートメニュースクリーンショット |
-| `20b_screenshot_settings.png` | 設定アプリスクリーンショット |
+| `20_scripts/` | 収集したスクリプト・バッチファイル格納ディレクトリ |
+| `20_scripts_manifest.json` | スクリプト・バッチファイル収集マニフェスト（収集元パス・カテゴリ・サイズ等） |
 
 ---
 
