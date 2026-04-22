@@ -1743,10 +1743,31 @@ $f = Save-Text "19_gpresult.txt" $gpresultLines
 Append-Index "19. GPO 適用結果（テキスト）" $f
 
 # gpresult HTML形式（詳細レポート）
-$gpresultHtml = Join-Path $outDir "19b_gpresult.html"
-gpresult /h $gpresultHtml /f 2>&1 | Out-Null
-if (Test-Path $gpresultHtml) {
-    Append-Index "19b. GPO 適用結果（HTML詳細）" $gpresultHtml
+# /user 指定なしでは実行ユーザー分のみ取得できるため、管理者時はプロファイルを列挙して全ユーザー分取得する
+if ($isAdmin) {
+    $gpUserProfiles = Get-WmiObject Win32_UserProfile -ErrorAction SilentlyContinue |
+        Where-Object { -not $_.Special -and (Test-Path $_.LocalPath) } |
+        Sort-Object LocalPath
+    foreach ($gpp in $gpUserProfiles) {
+        try {
+            $gpNtAccount = (New-Object System.Security.Principal.SecurityIdentifier($gpp.SID)).Translate(
+                [System.Security.Principal.NTAccount]).Value
+            $gpSafeName  = $gpNtAccount -replace '[\\\/\s:*?"<>|]', '_'
+            $gpHtmlPath  = Join-Path $outDir "19b_gpresult_$gpSafeName.html"
+            gpresult /user $gpNtAccount /h $gpHtmlPath /f 2>&1 | Out-Null
+            if (Test-Path $gpHtmlPath) {
+                Append-Index "19b. GPO 適用結果 HTML ($gpNtAccount)" $gpHtmlPath
+            }
+        } catch {
+            # SID を NTAccount に変換できない（削除済みアカウント等）はスキップ
+        }
+    }
+} else {
+    $gpresultHtml = Join-Path $outDir "19b_gpresult.html"
+    gpresult /h $gpresultHtml /f 2>&1 | Out-Null
+    if (Test-Path $gpresultHtml) {
+        Append-Index "19b. GPO 適用結果（HTML詳細）" $gpresultHtml
+    }
 }
 
 # レジストリポリシーキースキャン（HKLM/HKCU の Policies キー配下）
@@ -1772,18 +1793,60 @@ function Get-RegistryPolicies {
     return $results
 }
 
-$policyRoots = @(
-    'HKLM:\SOFTWARE\Policies',
-    'HKCU:\SOFTWARE\Policies',
-    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies',
-    'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies'
-)
 $allPolicies = [ordered]@{
-    ComputerPolicies = @(Get-RegistryPolicies $policyRoots[0])
-    UserPolicies     = @(Get-RegistryPolicies $policyRoots[1])
-    ComputerPoliciesLegacy = @(Get-RegistryPolicies $policyRoots[2])
-    UserPoliciesLegacy     = @(Get-RegistryPolicies $policyRoots[3])
+    ComputerPolicies       = @(Get-RegistryPolicies 'HKLM:\SOFTWARE\Policies')
+    ComputerPoliciesLegacy = @(Get-RegistryPolicies 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies')
+    UserPoliciesPerUser    = [ordered]@{}
 }
+
+# 全ユーザーの HKCU ポリシーを収集する
+# ログイン中ユーザーは HKU に hive が既にロードされているため直接スキャンし、
+# ログアウト済みユーザーは NTUSER.DAT を reg load でマウントしてスキャン後に unload する
+# （reg load には管理者権限が必要）
+if ($isAdmin) {
+    $regUserProfiles = Get-WmiObject Win32_UserProfile -ErrorAction SilentlyContinue |
+        Where-Object { -not $_.Special -and (Test-Path $_.LocalPath) }
+    foreach ($rup in $regUserProfiles) {
+        $rupSid     = $rup.SID
+        $rupHkuBase = "Registry::HKEY_USERS\$rupSid"
+        $wasLoaded  = Test-Path $rupHkuBase
+
+        if (-not $wasLoaded) {
+            $ntdatPath = Join-Path $rup.LocalPath 'NTUSER.DAT'
+            if (Test-Path $ntdatPath) {
+                reg load "HKU\$rupSid" $ntdatPath 2>&1 | Out-Null
+            }
+        }
+
+        try {
+            $rupAccount = (New-Object System.Security.Principal.SecurityIdentifier($rupSid)).Translate(
+                [System.Security.Principal.NTAccount]).Value
+        } catch {
+            $rupAccount = $rupSid
+        }
+
+        $rupPolicies1 = @(Get-RegistryPolicies "$rupHkuBase\SOFTWARE\Policies")
+        $rupPolicies2 = @(Get-RegistryPolicies "$rupHkuBase\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies")
+        $allPolicies.UserPoliciesPerUser[$rupAccount] = [ordered]@{
+            UserPolicies       = $rupPolicies1
+            UserPoliciesLegacy = $rupPolicies2
+        }
+
+        if (-not $wasLoaded) {
+            # アンロード前に GC でレジストリハンドルを解放しておく
+            [GC]::Collect()
+            [GC]::WaitForPendingFinalizers()
+            reg unload "HKU\$rupSid" 2>&1 | Out-Null
+        }
+    }
+} else {
+    # 非管理者の場合は実行ユーザー分のみ
+    $allPolicies.UserPoliciesPerUser['(current user)'] = [ordered]@{
+        UserPolicies       = @(Get-RegistryPolicies 'HKCU:\SOFTWARE\Policies')
+        UserPoliciesLegacy = @(Get-RegistryPolicies 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies')
+    }
+}
+
 $f = Save-Json "19c_registry_policies.json" $allPolicies
 Append-Index "19c. レジストリポリシー (SOFTWARE\Policies)" $f
 

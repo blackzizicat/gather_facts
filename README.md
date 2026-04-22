@@ -145,8 +145,12 @@
 
 ### 20. ポリシー設定
 - GPO 適用結果テキスト（`gpresult /r`、Unicode出力で文字化け防止）
-- GPO 適用結果 HTML 詳細レポート（`gpresult /h`）
-- レジストリポリシーキー値（`HKLM/HKCU:\SOFTWARE\Policies\`・`...\CurrentVersion\Policies\`）
+- GPO 適用結果 HTML 詳細レポート
+  - **管理者権限あり**: `Win32_UserProfile` でプロファイルを列挙し、`gpresult /user [ユーザー名] /h` をユーザーごとに実行して全ユーザー分を収集
+  - **管理者権限なし**: 実行ユーザー分のみ（`gpresult /h`）
+- レジストリポリシーキー値（`HKLM:\SOFTWARE\Policies\`・`...\CurrentVersion\Policies\`）
+  - **管理者権限あり**: 全ユーザーの `HKCU` ポリシーを収集。ログイン中ユーザーは `HKU\<SID>` を直接スキャン、ログアウト済みユーザーは `NTUSER.DAT` を `reg load` でマウントしてスキャン後にアンロード
+  - **管理者権限なし**: 実行ユーザー分のみ
 - 監査ポリシー（`auditpol /get /category:*`）
 - パスワード・アカウントロックアウトポリシー（`net accounts`）
 - ローカルセキュリティポリシー全体（`secedit /export`、管理者権限時のみ）
@@ -223,9 +227,9 @@
 | `18b_windows_terminal_settings.json` | Windows Terminal 設定 |
 | `18c_shell_settings.json` | シェル・エクスプローラー設定 |
 | `18d_certificates.json` | 証明書一覧 |
-| `19_gpresult.txt` | GPO 適用結果（テキスト） |
-| `19b_gpresult.html` | GPO 適用結果（HTML 詳細） |
-| `19c_registry_policies.json` | レジストリポリシーキー値 |
+| `19_gpresult.txt` | GPO 適用結果（テキスト、実行ユーザー分） |
+| `19b_gpresult_[ユーザー名].html` | GPO 適用結果（HTML 詳細、管理者時はユーザーごとに生成） |
+| `19c_registry_policies.json` | レジストリポリシーキー値（管理者時は全ユーザーの HKCU を含む） |
 | `19d_audit_policy.txt` | 監査ポリシー |
 | `19e_account_policy.txt` | アカウント・ロックアウトポリシー |
 | `19f_local_security_policy.inf` | ローカルセキュリティポリシー全体 |
@@ -286,3 +290,5 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 - **管理者権限推奨**: BitLocker・ファイアウォールルール・secedit・デフォルトユーザープロファイルのレジストリハイブ読み取りには管理者権限が必要
 - **ドメイン参加マシン**: GPO 情報・ドメインログオンスクリプト・フォルダリダイレクト等の組織管理情報が追加で取得される
 - **セキュリティ情報**: MDE オンボーディング状態・Defender 設定・ASR ルール等はセキュリティ担当者向けの情報を含む
+- **gpresult /user の制限**: 管理者権限で実行した場合に全ユーザー分の HTML レポートを生成するが、対象マシンに**一度もログインしていないドメインユーザー**はローカルプロファイルが存在しないため取得できない。`Win32_UserProfile` に登録されているローカルユーザーおよびログイン実績のあるドメインユーザーのみが対象となる
+- **HKCU レジストリの他ユーザー分収集**: ログアウト済みユーザーの HKCU ポリシーは `NTUSER.DAT` を `reg load` でマウントして取得する。スキャン後は自動でアンロードするが、PowerShell がレジストリハンドルを保持している場合はアンロードに失敗することがある（スクリプト実行中に手動で対象ユーザーとしてログインが発生した場合など）
