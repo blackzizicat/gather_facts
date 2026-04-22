@@ -1544,15 +1544,27 @@ $f = Save-Json "16b_device_hardware_ids.json" $allPnpDevices
 Append-Index "16b. デバイス ハードウェア ID 一覧" $f
 
 # ─────────────────────────────────────────────
-# 16c. ペンタブレット・ペン入力デバイス詳細
+# 16c. 専門周辺機器の詳細情報
 #      キーワード/VIDフィルタで関連デバイスを絞り込み、ドライバー情報を結合
-#      Wacom/Huion/XP-Pen/Gaomon 等の主要メーカーに対応
+#      ペンタブレット / オーディオインターフェース / MIDIコントローラー /
+#      映像キャプチャ / 配信機器 等の主要メーカーに対応
 # ─────────────────────────────────────────────
 
 # 検索キーワード（デバイス名・メーカー・サービス名・DeviceID対象）
-$penKeywords = 'wacom|tablet|pen|digitizer|stylus|bamboo|intuos|cintiq|huion|xp.pen|gaomon|ugee|screenpad|tabletpc'
-# 主要ペンタブメーカー USB Vendor ID: Wacom=056A, Huion=28BD/2DC8, XP-Pen=28BD/0531, Gaomon=08F9
-$tabletVIDs  = 'VID_056A|VID_28BD|VID_2DC8|VID_0531|VID_08F9'
+$specializedDeviceKeywords = (
+    # ペンタブレット・デジタイザー
+    'wacom|tablet|pen|digitizer|stylus|bamboo|intuos|cintiq|huion|xp.pen|gaomon|ugee|screenpad|tabletpc|' +
+    # オーディオインターフェース・MIDIコントローラー
+    'focusrite|scarlett|clarett|universal.audio|apollo|motu|presonus|steinberg|ur[0-9]|yamaha|behringer|' +
+    'roland|korg|rme|fireface|apogee|audient|ssl|m.audio|maudio|tascam|avid|mbox|midi|asio|' +
+    # 映像キャプチャ・配信機器
+    'elgato|blackmagic|decklink|avermedia|magewell|epiphan|capture.card|stream.deck|camlink|4k60'
+)
+# 専門周辺機器メーカー USB Vendor ID
+# ペンタブ: Wacom=056A, Huion=28BD/2DC8, XP-Pen=0531, Gaomon=08F9
+# オーディオ: Focusrite=1235, MOTU=07FD, Universal Audio=2B40, Steinberg=0499
+# 映像キャプチャ: Elgato=0FD9, Blackmagic=1EDB, AVerMedia=07CA
+$specializedVIDs = 'VID_056A|VID_28BD|VID_2DC8|VID_0531|VID_08F9|VID_1235|VID_07FD|VID_2B40|VID_0499|VID_0FD9|VID_1EDB|VID_07CA'
 
 # Win32_PnPSignedDriver をメモリ上でマップ化してN+1クエリを回避
 $driverLookup = @{}
@@ -1560,11 +1572,11 @@ Get-CimInstance Win32_PnPSignedDriver -ErrorAction SilentlyContinue |
     Where-Object { $_.DeviceID } |
     ForEach-Object { $driverLookup[$_.DeviceID] = $_ }
 
-$penDeviceDetails = @(
+$specializedDeviceDetails = @(
     Get-CimInstance Win32_PnPEntity -ErrorAction SilentlyContinue |
     Where-Object {
         $searchStr = "$($_.Name) $($_.Manufacturer) $($_.Service) $($_.DeviceID) $(($_.HardwareID) -join ' ')"
-        $searchStr -imatch $penKeywords -or $searchStr -imatch $tabletVIDs
+        $searchStr -imatch $specializedDeviceKeywords -or $searchStr -imatch $specializedVIDs
     } |
     Sort-Object Name |
     ForEach-Object {
@@ -1593,8 +1605,8 @@ $penDeviceDetails = @(
     }
 )
 
-# Wacom 関連レジストリキーを収集（型番・設定情報）
-$wacomRegistry = [ordered]@{}
+# ベンダー固有レジストリキーを収集（型番・設定情報）
+$vendorRegistry = [ordered]@{}
 @(
     'HKLM:\SOFTWARE\Wacom',
     'HKLM:\SOFTWARE\Wacom\Tablet',
@@ -1607,7 +1619,7 @@ $wacomRegistry = [ordered]@{}
     $regPath = $_
     $props = Get-ItemProperty $regPath -ErrorAction SilentlyContinue
     if ($props) {
-        $wacomRegistry[$regPath] = @(
+        $vendorRegistry[$regPath] = @(
             $props.PSObject.Properties |
             Where-Object { $_.Name -notmatch '^PS' } |
             ForEach-Object { [ordered]@{ Name = $_.Name; Value = "$($_.Value)" } }
@@ -1615,13 +1627,13 @@ $wacomRegistry = [ordered]@{}
     }
 }
 
-$penTabletInfo = [ordered]@{
-    MatchedDeviceCount = $penDeviceDetails.Count
-    MatchedDevices     = $penDeviceDetails
-    WacomRegistry      = $wacomRegistry
+$specializedDeviceInfo = [ordered]@{
+    MatchedDeviceCount = $specializedDeviceDetails.Count
+    MatchedDevices     = $specializedDeviceDetails
+    VendorRegistry     = $vendorRegistry
 }
-$f = Save-Json "16c_pen_tablet_devices.json" $penTabletInfo
-Append-Index "16c. ペンタブレット・ペン入力デバイス詳細" $f
+$f = Save-Json "16c_specialized_devices.json" $specializedDeviceInfo
+Append-Index "16c. 専門周辺機器詳細（ペンタブ／オーディオI/F／映像キャプチャ等）" $f
 
 # ─────────────────────────────────────────────
 # 17. フォント・プリンター

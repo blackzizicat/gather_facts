@@ -127,9 +127,10 @@
 ### 16. ドライバー
 - インストール済みデバイスドライバー一覧（バージョン・署名状態・製造元）
 - **デバイス ハードウェア ID 一覧**（`Win32_PnPEntity` から HardwareID / CompatibleID を取得）
-- **ペンタブレット・ペン入力デバイス詳細**（Wacom / Huion / XP-Pen / Gaomon 等のキーワード・VIDフィルタで絞り込み）
+- **専門周辺機器の詳細情報**（キーワード・USB VID フィルタで絞り込み、ドライバー情報を結合）
+  - 対象カテゴリ: ペンタブレット / デジタイザー（Wacom / Huion / XP-Pen / Gaomon 等）、オーディオインターフェース・MIDIコントローラー（Focusrite / MOTU / Universal Audio / Roland / Korg 等）、映像キャプチャ・配信機器（Elgato / Blackmagic / AVerMedia 等）
   - デバイス情報・ドライバー情報の結合
-  - Wacom 関連レジストリキー（型番・設定情報）
+  - ベンダー固有レジストリキー（型番・設定情報）
 
 ### 17. フォント・プリンター
 - インストール済みフォント一覧
@@ -220,7 +221,7 @@
 | `15b_network_drives.json` | ネットワークドライブ一覧 |
 | `16_drivers.json` | デバイスドライバー一覧 |
 | `16b_device_hardware_ids.json` | デバイス ハードウェア ID 一覧（Win32_PnPEntity） |
-| `16c_pen_tablet_devices.json` | ペンタブレット・ペン入力デバイス詳細（Wacom/Huion 等） |
+| `16c_specialized_devices.json` | 専門周辺機器詳細（ペンタブ／オーディオI/F／映像キャプチャ等） |
 | `17_fonts.json` | フォント一覧 |
 | `17b_printers.json` | プリンター一覧 |
 | `18_powershell_profiles.txt` | PowerShell プロファイル内容 |
