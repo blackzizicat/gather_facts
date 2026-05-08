@@ -11,12 +11,18 @@
 .PARAMETER OutputPath
     出力先ディレクトリ（省略時はスクリプトと同じ場所）
 
+.PARAMETER GenerateHtml
+    指定すると収集結果をまとめた HTML レポート（00_REPORT.html）を追加生成する
+
 .EXAMPLE
     .\Collect-WindowsEnv.ps1
     .\Collect-WindowsEnv.ps1 -OutputPath "D:\EnvBackup"
+    .\Collect-WindowsEnv.ps1 -GenerateHtml
+    .\Collect-WindowsEnv.ps1 -OutputPath "D:\EnvBackup" -GenerateHtml
 #>
 param(
-    [string]$OutputPath = $PSScriptRoot
+    [string]$OutputPath = $PSScriptRoot,
+    [switch]$GenerateHtml
 )
 
 Set-StrictMode -Version Latest
@@ -2065,6 +2071,101 @@ $indexPath = Join-Path $outDir "00_INDEX.md"
 $indexLines | Set-Content -Path $indexPath -Encoding UTF8
 
 # ─────────────────────────────────────────────
+# HTML レポート生成（-GenerateHtml 指定時）
+# ─────────────────────────────────────────────
+$htmlPath = $null
+if ($GenerateHtml) {
+    Write-Host " HTML レポート生成中..." -ForegroundColor Cyan
+
+    $navSb  = [System.Text.StringBuilder]::new()
+    $secsSb = [System.Text.StringBuilder]::new()
+    [void]$navSb.Append('<ul>')
+
+    $catName = ''
+    foreach ($idxLine in $indexLines) {
+        if ($idxLine -match '^## (.+)') { $catName = $matches[1] }
+        if ($idxLine -match '^\s+ファイル:\s+(.+)' -and $catName -ne '') {
+            $fn  = $matches[1].Trim()
+            $sid = $fn -replace '[^a-zA-Z0-9]', '_'
+            $encCat = [System.Net.WebUtility]::HtmlEncode($catName)
+            $encFn  = [System.Net.WebUtility]::HtmlEncode($fn)
+            [void]$navSb.Append("<li><a href='#$sid' title='$encCat'>$encCat</a></li>")
+
+            $fp  = Join-Path $outDir $fn
+            $ext = [System.IO.Path]::GetExtension($fn).ToLower()
+            [void]$secsSb.Append("<section id='$sid'>")
+            [void]$secsSb.Append("<h2>$encCat</h2>")
+            [void]$secsSb.Append("<p class='filename'>$encFn</p>")
+            if (-not (Test-Path $fp -PathType Leaf)) {
+                [void]$secsSb.Append("<p class='empty'>ファイルが見つかりません</p>")
+            } elseif ($ext -eq '.html') {
+                [void]$secsSb.Append("<p><a href='$encFn' target='_blank'>別ウィンドウで開く ↗</a></p>")
+                [void]$secsSb.Append("<iframe src='$encFn' style='width:100%;height:600px;border:1px solid #444;'></iframe>")
+            } else {
+                try   { $raw = [System.IO.File]::ReadAllText($fp, [System.Text.Encoding]::UTF8) }
+                catch { $raw = '' }
+                $cls = if ($ext -eq '.json') { 'json' } else { 'text' }
+                [void]$secsSb.Append("<pre class='$cls'>$([System.Net.WebUtility]::HtmlEncode($raw))</pre>")
+            }
+            [void]$secsSb.Append('</section>')
+        }
+    }
+    [void]$navSb.Append('</ul>')
+
+    $navHtml  = $navSb.ToString()
+    $bodyHtml = $secsSb.ToString()
+
+    $metaHost  = [System.Net.WebUtility]::HtmlEncode($env:COMPUTERNAME)
+    $metaUser  = [System.Net.WebUtility]::HtmlEncode($env:USERNAME)
+    $metaAdmin = if ($isAdmin) { '管理者権限あり' } else { '管理者権限なし' }
+    $metaDate  = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+
+    $htmlReport = @"
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Windows 環境調査レポート - $metaHost</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Segoe UI',sans-serif;background:#1e1e1e;color:#d4d4d4;display:flex;min-height:100vh}
+#sidebar{width:260px;min-width:260px;background:#252526;position:sticky;top:0;height:100vh;overflow-y:auto}
+#sidebar h1{font-size:13px;font-weight:600;color:#9cdcfe;padding:12px 16px 8px;border-bottom:1px solid #3e3e42}
+#sidebar .meta{font-size:11px;color:#858585;padding:8px 16px 10px;border-bottom:1px solid #3e3e42;line-height:1.7}
+#sidebar ul{list-style:none;padding-bottom:16px}
+#sidebar ul li a{display:block;padding:3px 16px;font-size:12px;color:#cccccc;text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#sidebar ul li a:hover{background:#2a2d2e;color:#fff}
+#main{flex:1;padding:24px;overflow-x:hidden;min-width:0}
+section{margin-bottom:32px;border:1px solid #3e3e42;border-radius:4px;overflow:hidden}
+section h2{font-size:13px;font-weight:600;background:#2d2d30;color:#9cdcfe;padding:9px 16px;border-bottom:1px solid #3e3e42}
+.filename{font-size:11px;color:#6a9955;padding:3px 16px;background:#252526;border-bottom:1px solid #3e3e42}
+pre{padding:14px 16px;font-size:12px;font-family:'Cascadia Code','Consolas',monospace;white-space:pre-wrap;word-break:break-all;line-height:1.5;max-height:600px;overflow-y:auto;background:#1e1e1e}
+pre.json{color:#9cdcfe}
+pre.text{color:#d4d4d4}
+.empty{padding:10px 16px;color:#858585;font-style:italic}
+a{color:#4ec9b0}
+iframe{display:block}
+</style>
+</head>
+<body>
+<nav id="sidebar">
+<h1>Windows 環境調査</h1>
+<div class="meta">ホスト: $metaHost<br>ユーザー: $metaUser<br>権限: $metaAdmin<br>収集日時: $metaDate</div>
+$navHtml
+</nav>
+<main id="main">
+$bodyHtml
+</main>
+</body>
+</html>
+"@
+
+    $htmlPath = Join-Path $outDir "00_REPORT.html"
+    [System.IO.File]::WriteAllText($htmlPath, $htmlReport, [System.Text.Encoding]::UTF8)
+}
+
+# ─────────────────────────────────────────────
 # サマリー表示
 # ─────────────────────────────────────────────
 $files = Get-ChildItem $outDir | Measure-Object
@@ -2087,4 +2188,7 @@ if (-not $isAdmin) {
 }
 Write-Host ""
 Write-Host " インデックス: $indexPath"
+if ($htmlPath) {
+    Write-Host " HTML レポート: $htmlPath"
+}
 Write-Host "=" * 60 -ForegroundColor Green

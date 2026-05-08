@@ -176,6 +176,7 @@
 | ファイル名 | 内容 |
 |-----------|------|
 | `00_INDEX.md` | 収集結果のインデックス |
+| `00_REPORT.html` | 収集結果の HTML レポート（`-GenerateHtml` 指定時のみ生成） |
 | `01_system_info.json` | OS・CPU・GPU・BIOS・マザーボード情報 |
 | `02_disk_partitions.json` | 物理ディスク・パーティション情報 |
 | `02b_logical_disks.json` | 論理ドライブ一覧（容量・空き容量・使用率） |
@@ -253,7 +254,16 @@
 
 # 出力先を指定する場合
 .\Collect-WindowsEnv.ps1 -OutputPath "D:\EnvBackup"
+
+# HTML レポートも生成する場合
+.\Collect-WindowsEnv.ps1 -GenerateHtml
+
+# 出力先指定 + HTML レポート生成
+.\Collect-WindowsEnv.ps1 -OutputPath "D:\EnvBackup" -GenerateHtml
 ```
+
+`-GenerateHtml` を指定すると、収集した全ファイルの内容をまとめた `00_REPORT.html` が出力フォルダに追加生成されます。
+左サイドバーにカテゴリナビゲーション、右側に各ファイルの内容が表示されます。
 
 ## 実行ポリシーエラーの回避方法
 

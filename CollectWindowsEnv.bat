@@ -21,7 +21,7 @@ if not exist "%~dp0Collect-WindowsEnv.ps1" (
     exit /b 1
 )
 
-powershell.exe -ExecutionPolicy Bypass -NoProfile -File "%~dp0Collect-WindowsEnv.ps1"
+powershell.exe -ExecutionPolicy Bypass -NoProfile -File "%~dp0Collect-WindowsEnv.ps1" -GenerateHtml
 set PS_EXIT=%errorlevel%
 
 echo.
