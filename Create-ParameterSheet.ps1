@@ -73,18 +73,6 @@ function fesc {
     return $s
 }
 
-function Normalize-InstallDate {
-    param([string]$d)
-    if ([string]::IsNullOrEmpty($d) -or $d -eq '-') { return '-' }
-    if ($d -match '^\d{8}$') {
-        return "$($d.Substring(0,4))-$($d.Substring(4,2))-$($d.Substring(6,2))"
-    }
-    if ($d -match '^(\d{1,2})/(\d{1,2})/(\d{4})$') {
-        return '{0}-{1:D2}-{2:D2}' -f $Matches[3], [int]$Matches[1], [int]$Matches[2]
-    }
-    return $d
-}
-
 function Bool-Str {
     param([object]$Value, [string]$TrueLabel = '有効', [string]$FalseLabel = '無効')
     if ($null -eq $Value) { return '-' }
@@ -214,8 +202,6 @@ foreach ($currentAuditPath in $foldersToProcess) {
         ln "| OS名 | $(fesc $os.Caption) |"
         ln "| バージョン | $(fesc $os.Version) (Build $(fesc $os.BuildNumber)) |"
         ln "| アーキテクチャ | $(fesc $os.OSArchitecture) |"
-        ln "| インストール日 | $(ConvertFrom-JsonDate $os.InstallDate) |"
-        ln "| 最終起動 | $(ConvertFrom-JsonDate $os.LastBootUpTime) |"
 
         h3 'ハードウェア'
         ln '| 項目 | 値 |'
@@ -242,6 +228,18 @@ foreach ($currentAuditPath in $foldersToProcess) {
             }
         } else { ln '| - | (GPUなし) | - | - |' }
 
+        $specDevs = Read-JsonSafe (Join-Path $currentAuditPath '16c_specialized_devices.json')
+        h3 '専用デバイス'
+        if ($specDevs -and $specDevs.MatchedDevices -and @($specDevs.MatchedDevices).Count -gt 0) {
+            ln '| デバイス名 | クラス | メーカー | ドライバーバージョン | INF |'
+            ln '|-----------|--------|---------|------------------|-----|'
+            foreach ($dev in @($specDevs.MatchedDevices)) {
+                $dv  = if ($dev.Driver) { fesc $dev.Driver.DriverVersion } else { '-' }
+                $inf = if ($dev.Driver) { fesc $dev.Driver.InfName } else { '-' }
+                ln "| $(fesc $dev.Name) | $(fesc $dev.PNPClass) | $(fesc $dev.Manufacturer) | $dv | $inf |"
+            }
+        } else { ln '(専用デバイスなし)' }
+
         h3 'BIOS / セキュアブート'
         ln '| 項目 | 値 |'
         ln '|------|-----|'
@@ -263,10 +261,10 @@ foreach ($currentAuditPath in $foldersToProcess) {
     $disks = Read-JsonSafe (Join-Path $currentAuditPath '02_disk_partitions.json')
     h3 '物理ディスク'
     if ($disks) {
-        ln '| # | モデル | 容量 (GB) | 接続 | タイプ | 状態 |'
-        ln '|---|--------|-----------|------|--------|------|'
+        ln '| # | モデル | 容量 (GB) | 接続 | タイプ |'
+        ln '|---|--------|-----------|------|--------|'
         foreach ($d in @($disks)) {
-            ln "| $(fv $d.DiskNumber) | $(fesc $d.FriendlyName) | $(fv $d.SizeGB) | $(fesc $d.BusType) | $(fesc $d.PartitionStyle) | $(fesc $d.OperationalStatus) |"
+            ln "| $(fv $d.DiskNumber) | $(fesc $d.FriendlyName) | $(fv $d.SizeGB) | $(fesc $d.BusType) | $(fesc $d.PartitionStyle) |"
         }
     } else { nodata }
 
@@ -316,14 +314,14 @@ foreach ($currentAuditPath in $foldersToProcess) {
     $netRaw = Read-JsonSafe (Join-Path $currentAuditPath '09_network_adapters.json')
     if ($netRaw) {
         $adapters = @($netRaw) | Sort-Object Name
-        ln '| アダプター名 | 状態 | MAC | IPアドレス | CIDR | ゲートウェイ | DNS | 速度 |'
-        ln '|-------------|------|-----|-----------|------|------------|-----|------|'
+        ln '| アダプター名 | MAC | IPアドレス | CIDR | ゲートウェイ | DNS |'
+        ln '|-------------|-----|-----------|------|------------|-----|'
         foreach ($a in $adapters) {
             $ipStr  = if ($a.IPv4Address)      { (@($a.IPv4Address) | Where-Object { $_ }) -join ', ' } else { '-' }
             $cidr   = if ($a.IPv4PrefixLength) { '/' + (@($a.IPv4PrefixLength)[0]) } else { '-' }
             $gwStr  = if ($a.DefaultGateway)   { (@($a.DefaultGateway) | Where-Object { $_ }) -join ', ' } else { '-' }
             $dnsStr = if ($a.DNSServers)       { (@($a.DNSServers) | Where-Object { $_ }) -join ', ' } else { '-' }
-            ln "| $(fesc $a.Name) | $(fesc $a.Status) | $(fesc $a.MacAddress) | $ipStr | $cidr | $(fesc $gwStr) | $(fesc $dnsStr) | $(fesc $a.LinkSpeedMbps) |"
+            ln "| $(fesc $a.Name) | $(fesc $a.MacAddress) | $ipStr | $cidr | $(fesc $gwStr) | $(fesc $dnsStr) |"
         }
     } else { nodata }
 
@@ -389,6 +387,57 @@ foreach ($currentAuditPath in $foldersToProcess) {
         }
     } else { nodata }
 
+    $fwRules = Read-JsonSafe (Join-Path $currentAuditPath '09e_firewall_rules_custom.json')
+    h3 'カスタムファイアウォールルール'
+    if ($fwRules) {
+        $sortedRules = @($fwRules) | Sort-Object Direction, DisplayName
+        ln '| 表示名 | 方向 | アクション | プロファイル | 有効 | プロトコル |'
+        ln '|--------|------|----------|------------|------|----------|'
+        foreach ($r in $sortedRules) {
+            ln "| $(fesc $r.DisplayName -MaxLen 50) | $(fesc $r.Direction) | $(fesc $r.Action) | $(fesc $r.Profile) | $(fesc $r.Enabled) | $(fesc $r.Protocol) |"
+        }
+    } else { nodata }
+
+    $defPref = Read-JsonSafe (Join-Path $currentAuditPath '09i_defender_preferences.json')
+    h3 'Windows Defender 設定'
+    if ($defPref) {
+        ln '| 項目 | 値 |'
+        ln '|------|-----|'
+        ln "| リアルタイム保護 | $(Bool-Str $defPref.DisableRealtimeMonitoring '無効' '有効') |"
+        ln "| 動作監視 | $(Bool-Str $defPref.DisableBehaviorMonitoring '無効' '有効') |"
+        ln "| 初回検出時ブロック | $(Bool-Str $defPref.DisableBlockAtFirstSeen '無効' '有効') |"
+        ln "| IOAVプロテクション | $(Bool-Str $defPref.DisableIOAVProtection '無効' '有効') |"
+        ln "| スクリプトスキャン | $(Bool-Str $defPref.DisableScriptScanning '無効' '有効') |"
+        ln "| ネットワーク保護 | $(fv $defPref.EnableNetworkProtection) |"
+        ln "| PUA保護 | $(fv $defPref.PUAProtection) |"
+        ln "| MAPSレポート | $(fv $defPref.MAPSReporting) |"
+        ln "| クラウドブロックレベル | $(fv $defPref.CloudBlockLevel) |"
+        ln "| スキャンスケジュール | Day=$(fv $defPref.ScanScheduleDay) $(fv $defPref.ScanScheduleTime) |"
+        $exPaths = @($defPref.ExclusionPath)  | Where-Object { $_ }
+        $exExts  = @($defPref.ExclusionExtension) | Where-Object { $_ }
+        $exProcs = @($defPref.ExclusionProcess)   | Where-Object { $_ }
+        if ($exPaths.Count -gt 0)  { ln "| 除外パス | $(fesc ($exPaths -join ', ') -MaxLen 80) |" }
+        if ($exExts.Count -gt 0)   { ln "| 除外拡張子 | $(fesc ($exExts -join ', ') -MaxLen 80) |" }
+        if ($exProcs.Count -gt 0)  { ln "| 除外プロセス | $(fesc ($exProcs -join ', ') -MaxLen 80) |" }
+    } else { nodata }
+
+    $certs = Read-JsonSafe (Join-Path $currentAuditPath '18d_certificates.json')
+    h3 '証明書 (秘密鍵あり / ユーザーストア)'
+    if ($certs) {
+        $notable = @($certs) | Where-Object {
+            $_.HasPrivateKey -eq $true -or $_.Store -match '\\My$'
+        } | Sort-Object Store, Subject
+        if ($notable.Count -gt 0) {
+            ln '| ストア | サブジェクト | 有効期限 | 秘密鍵 |'
+            ln '|--------|------------|---------|--------|'
+            foreach ($c in $notable) {
+                $storeShort = $c.Store -replace 'Cert:\\', '' -replace 'LocalMachine\\', 'LM\\' -replace 'CurrentUser\\', 'CU\\'
+                $notAfter   = ConvertFrom-JsonDate $c.NotAfter
+                ln "| $(fesc $storeShort) | $(fesc $c.Subject -MaxLen 60) | $notAfter | $(Bool-Str $c.HasPrivateKey 'あり' 'なし') |"
+            }
+        } else { ln '(秘密鍵あり証明書なし)' }
+    } else { nodata }
+
     # ═══════════════════════════════════════════════════════
     # 5. ローカルユーザー・グループ
     # ═══════════════════════════════════════════════════════
@@ -399,12 +448,11 @@ foreach ($currentAuditPath in $foldersToProcess) {
     h3 'ローカルユーザー'
     if ($users) {
         $sortedUsers = @($users) | Sort-Object { $_.Name.ToLower() }
-        ln '| ユーザー名 | 有効 | 最終ログオン | 説明 |'
-        ln '|-----------|------|------------|------|'
+        ln '| ユーザー名 | 有効 | 説明 |'
+        ln '|-----------|------|------|'
         foreach ($u in $sortedUsers) {
-            $logon   = ConvertFrom-JsonDate $u.LastLogon
             $enabled = Bool-Str $u.Enabled 'あり' 'なし'
-            ln "| $(fesc $u.Name) | $enabled | $logon | $(fesc $u.Description '(なし)') |"
+            ln "| $(fesc $u.Name) | $enabled | $(fesc $u.Description '(なし)') |"
         }
     } else { nodata }
 
@@ -423,19 +471,66 @@ foreach ($currentAuditPath in $foldersToProcess) {
     } else { nodata }
 
     # ═══════════════════════════════════════════════════════
-    # 6. インストール済みアプリ (Win32)
+    # 6. インストール済みアプリ
     # ═══════════════════════════════════════════════════════
 
-    h2 '6. インストール済みアプリ (Win32)'
+    h2 '6. インストール済みアプリ'
 
     $apps = Read-JsonSafe (Join-Path $currentAuditPath '03_installed_apps_win32.json')
+    h3 'Win32 アプリ'
     if ($apps) {
         $sortedApps = @($apps) | Sort-Object { $_.Name.ToLower() }
-        ln '| アプリ名 | バージョン | 発行者 | インストール日 |'
-        ln '|---------|----------|--------|--------------|'
+        ln '| アプリ名 | バージョン | 発行者 |'
+        ln '|---------|----------|--------|'
         foreach ($app in $sortedApps) {
-            $idate = Normalize-InstallDate (fv $app.InstallDate)
-            ln "| $(fesc $app.Name) | $(fesc $app.Version) | $(fesc $app.Publisher) | $idate |"
+            ln "| $(fesc $app.Name) | $(fesc $app.Version) | $(fesc $app.Publisher) |"
+        }
+    } else { nodata }
+
+    $portableApps = Read-JsonSafe (Join-Path $currentAuditPath '03c_portable_apps_scan.json')
+    h3 'ポータブルアプリ (未登録・フォルダ単位)'
+    if ($portableApps) {
+        $unregistered = @($portableApps) | Where-Object { -not $_.IsRegistered }
+        if ($unregistered.Count -gt 0) {
+            # フォルダごとに代表1件（ProductNameあり優先）
+            $dirSeen = @{}
+            $rows    = [System.Collections.Generic.List[object]]::new()
+            foreach ($a in ($unregistered | Sort-Object @{Expression={if($_.ProductName){0}else{1}}}, FullPath)) {
+                $dir = Split-Path $a.FullPath -Parent
+                if (-not $dirSeen.ContainsKey($dir)) { $dirSeen[$dir] = $true; $rows.Add($a) }
+            }
+            $sorted = $rows | Sort-Object { if($_.ProductName){"0$($_.ProductName)"}else{"1$($_.FullPath)"} }
+            ln '| 製品名 | バージョン | メーカー | フォルダ |'
+            ln '|--------|----------|---------|---------|'
+            foreach ($app in $sorted) {
+                $name = if ($app.ProductName) { fesc $app.ProductName } else { fesc (Split-Path $app.FullPath -Leaf) }
+                $dir  = fesc (Split-Path $app.FullPath -Parent) -MaxLen 60
+                ln "| $name | $(fesc $app.FileVersion) | $(fesc $app.CompanyName -MaxLen 30) | $dir |"
+            }
+        } else { ln '(ポータブルアプリなし)' }
+    } else { nodata }
+
+    $msiApps = Read-JsonSafe (Join-Path $currentAuditPath '03b_installed_apps_msi.json')
+    h3 'MSI アプリ'
+    if ($msiApps) {
+        $sortedMsi = @($msiApps) | Sort-Object { $_.Name.ToLower() }
+        ln '| アプリ名 | バージョン | インストール元 |'
+        ln '|---------|----------|--------------|'
+        foreach ($app in $sortedMsi) {
+            $srcShort = fesc $app.Source -MaxLen 50
+            ln "| $(fesc $app.Name) | $(fesc $app.Version) | $srcShort |"
+        }
+    } else { nodata }
+
+    $storeApps = Read-JsonSafe (Join-Path $currentAuditPath '04_installed_apps_store.json')
+    h3 'ストアアプリ'
+    if ($storeApps) {
+        $sortedStore = @($storeApps) | Where-Object { $_.Name -notmatch '^[0-9a-f-]{8,}$' } | Sort-Object { $_.Name.ToLower() }
+        ln '| パッケージ名 | バージョン | 発行者 |'
+        ln '|-----------|----------|--------|'
+        foreach ($app in $sortedStore) {
+            $pub = if ($app.Publisher -match 'O=([^,]+)') { $Matches[1].Trim() } else { fesc $app.Publisher -MaxLen 30 }
+            ln "| $(fesc $app.Name) | $(fesc $app.Version) | $pub |"
         }
     } else { nodata }
 
@@ -491,6 +586,17 @@ foreach ($currentAuditPath in $foldersToProcess) {
         devrow 'aws (AWS CLI)'   ($dev.OtherTools.aws)
     } else { nodata }
 
+    $psModules = Read-JsonSafe (Join-Path $currentAuditPath '06d_powershell_modules.json')
+    h3 'PowerShell モジュール'
+    if ($psModules) {
+        $sortedMods = @($psModules) | Sort-Object { $_.Name.ToLower() }
+        ln '| モジュール名 | バージョン |'
+        ln '|------------|----------|'
+        foreach ($m in $sortedMods) {
+            ln "| $(fesc $m.Name) | $(fesc $m.Version) |"
+        }
+    } else { nodata }
+
     # ═══════════════════════════════════════════════════════
     # 8. スタートアップ
     # ═══════════════════════════════════════════════════════
@@ -535,12 +641,10 @@ foreach ($currentAuditPath in $foldersToProcess) {
     if ($services) {
         $autoSvcs = @($services) | Where-Object { $_.StartType -like 'Automatic*' } | Sort-Object Name
         if ($autoSvcs.Count -gt 0) {
-            ln '| サービス名 | 表示名 | 状態 | 実行アカウント |'
-            ln '|-----------|--------|------|-------------|'
+            ln '| サービス名 | 表示名 | 実行アカウント |'
+            ln '|-----------|--------|-------------|'
             foreach ($svc in $autoSvcs) {
-                $status = fesc $svc.Status
-                if ($svc.Status -eq 'Stopped') { $status = "$status (停止中)" }
-                ln "| $(fesc $svc.Name) | $(fesc $svc.DisplayName) | $status | $(fesc $svc.StartName) |"
+                ln "| $(fesc $svc.Name) | $(fesc $svc.DisplayName) | $(fesc $svc.StartName) |"
             }
         } else { ln '(自動起動サービスなし)' }
     } else { nodata }
@@ -576,6 +680,18 @@ foreach ($currentAuditPath in $foldersToProcess) {
         ln '(データなし - レジストリキー未設定)'
     }
 
+    $folderRedir = Read-JsonSafe (Join-Path $currentAuditPath '10i3_folder_redirection.json')
+    h3 'フォルダリダイレクト (シェルフォルダ)'
+    if ($folderRedir) {
+        ln '| フォルダ名 | パス |'
+        ln '|----------|------|'
+        foreach ($groupProp in $folderRedir.PSObject.Properties) {
+            foreach ($fp in $groupProp.Value.PSObject.Properties) {
+                ln "| $(fesc $fp.Name) | $(fesc $fp.Value) |"
+            }
+        }
+    } else { nodata }
+
     # ═══════════════════════════════════════════════════════
     # 11. Windows オプション機能 (有効のみ)
     # ═══════════════════════════════════════════════════════
@@ -583,6 +699,7 @@ foreach ($currentAuditPath in $foldersToProcess) {
     h2 '11. Windows オプション機能 (有効のみ)'
 
     $features = Read-JsonSafe (Join-Path $currentAuditPath '07_windows_optional_features.json')
+    h3 'オプション機能'
     if ($features) {
         $enabled = @($features) | Where-Object { $_.State -eq 'Enabled' } | Sort-Object Feature
         if ($enabled.Count -gt 0) {
@@ -590,6 +707,17 @@ foreach ($currentAuditPath in $foldersToProcess) {
             ln '|--------|'
             foreach ($f in $enabled) { ln "| $(fesc $f.Feature) |" }
         } else { ln '(有効なオプション機能はありません)' }
+    } else { nodata }
+
+    $caps = Read-JsonSafe (Join-Path $currentAuditPath '07b_windows_capabilities.json')
+    h3 'Windows 機能 (Capabilities・インストール済み)'
+    if ($caps) {
+        $instCaps = @($caps) | Where-Object { $_.State -eq 'Installed' } | Sort-Object Name
+        if ($instCaps.Count -gt 0) {
+            ln '| 機能名 |'
+            ln '|--------|'
+            foreach ($c in $instCaps) { ln "| $(fesc $c.Name) |" }
+        } else { ln '(インストール済みCapabilityはありません)' }
     } else { nodata }
 
     # ═══════════════════════════════════════════════════════
@@ -602,16 +730,221 @@ foreach ($currentAuditPath in $foldersToProcess) {
     if ($tasks) {
         $sortedTasks = @($tasks) | Sort-Object { $_.TaskName.ToLower() }
         if ($sortedTasks.Count -gt 0) {
-            ln '| タスク名 | フォルダ | 状態 | 最終実行 | アクション |'
-            ln '|---------|---------|------|---------|----------|'
+            ln '| タスク名 | フォルダ | アクション |'
+            ln '|---------|---------|----------|'
             foreach ($t in $sortedTasks) {
-                $lastRun = ConvertFrom-JsonDate $t.LastRunTime
                 $action  = if ($t.Actions -and @($t.Actions).Count -gt 0) {
                                fesc @($t.Actions)[0] -MaxLen 60
                            } else { '-' }
-                ln "| $(fesc $t.TaskName) | $(fesc $t.TaskPath) | $(fesc $t.State) | $lastRun | $action |"
+                ln "| $(fesc $t.TaskName) | $(fesc $t.TaskPath) | $action |"
             }
         } else { ln '(非Microsoftタスクなし)' }
+    } else { nodata }
+
+    # ═══════════════════════════════════════════════════════
+    # 13. シェル設定
+    # ═══════════════════════════════════════════════════════
+
+    h2 '13. シェル設定'
+
+    $shellSet   = Read-JsonSafe (Join-Path $currentAuditPath '18c_shell_settings.json')
+    $profPolicy = Read-JsonSafe (Join-Path $currentAuditPath '10i6_profile_policy.json')
+
+    h3 'シェル・エクスプローラー'
+    if ($shellSet) {
+        ln '| 項目 | 値 |'
+        ln '|------|-----|'
+        ln "| デフォルトブラウザ | $(fesc $shellSet.DefaultBrowserProgId) |"
+        ln "| デフォルトシェル | $(fesc $shellSet.DefaultShell) |"
+        if ($shellSet.FileExplorer) {
+            $fe = $shellSet.FileExplorer
+            ln "| 隠しファイルを表示 | $(Bool-Str $fe.ShowHiddenFiles '表示' '非表示') |"
+            ln "| 拡張子を表示 | $(Bool-Str $fe.ShowFileExtensions '表示' '非表示') |"
+            ln "| フルパスを表示 | $(Bool-Str $fe.ShowFullPath '表示' '非表示') |"
+        }
+    } else { nodata }
+
+    h3 'Winlogon (ログオンシェル)'
+    if ($profPolicy) {
+        $wlProp = $profPolicy.PSObject.Properties | Where-Object { $_.Name -match 'Winlogon' } | Select-Object -First 1
+        if ($wlProp) {
+            ln '| 項目 | 値 |'
+            ln '|------|-----|'
+            foreach ($vp in $wlProp.Value.PSObject.Properties) {
+                ln "| $(fesc $vp.Name) | $(fesc $vp.Value) |"
+            }
+        } else { ln '(Winlogon エントリなし)' }
+    } else { nodata }
+
+    $wtSettings = Read-JsonSafe (Join-Path $currentAuditPath '18b_windows_terminal_settings.json')
+    h3 'Windows Terminal プロファイル'
+    if ($wtSettings -and $wtSettings.profiles -and $wtSettings.profiles.list) {
+        $defGuid = fv $wtSettings.defaultProfile
+        ln '| プロファイル名 | コマンドライン | 既定 |'
+        ln '|-------------|-------------|------|'
+        foreach ($p in @($wtSettings.profiles.list)) {
+            $isDefault = if ($p.guid -eq $defGuid) { '★' } else { '' }
+            ln "| $(fesc $p.name) | $(fesc $p.commandline) | $isDefault |"
+        }
+    } else { nodata }
+
+    # ═══════════════════════════════════════════════════════
+    # 14. レジストリポリシー
+    # ═══════════════════════════════════════════════════════
+
+    h2 '14. レジストリポリシー'
+
+    $regPol = Read-JsonSafe (Join-Path $currentAuditPath '19c_registry_policies.json')
+
+    h3 'コンピューターポリシー (HKLM\Policies)'
+    if ($regPol -and $regPol.ComputerPolicies -and @($regPol.ComputerPolicies).Count -gt 0) {
+        ln '| キーパス | 名前 | 値 |'
+        ln '|---------|------|-----|'
+        foreach ($p in @($regPol.ComputerPolicies)) {
+            $ks = $p.KeyPath.Replace('HKEY_LOCAL_MACHINE\SOFTWARE\Policies\', '')
+            ln "| $(fesc $ks -MaxLen 60) | $(fesc $p.Name -MaxLen 50) | $(fesc $p.Value -MaxLen 60) |"
+        }
+    } else { nodata }
+
+    h3 'コンピューターポリシー Legacy (HKLM\...\Policies)'
+    if ($regPol -and $regPol.ComputerPoliciesLegacy -and @($regPol.ComputerPoliciesLegacy).Count -gt 0) {
+        ln '| キーパス | 名前 | 値 |'
+        ln '|---------|------|-----|'
+        foreach ($p in @($regPol.ComputerPoliciesLegacy)) {
+            $ks = $p.KeyPath.Replace('HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\', '')
+            ln "| $(fesc $ks -MaxLen 60) | $(fesc $p.Name -MaxLen 50) | $(fesc $p.Value -MaxLen 60) |"
+        }
+    } else { nodata }
+
+    h3 'ユーザーポリシー'
+    if ($regPol -and $regPol.UserPoliciesPerUser) {
+        $hasAnyUser = $false
+        foreach ($userProp in $regPol.UserPoliciesPerUser.PSObject.Properties) {
+            $uData = $userProp.Value
+            $allP  = @()
+            if ($uData.UserPolicies)       { $allP += @($uData.UserPolicies) }
+            if ($uData.UserPoliciesLegacy) { $allP += @($uData.UserPoliciesLegacy) }
+            if ($allP.Count -eq 0) { continue }
+            $hasAnyUser = $true
+            ln ''
+            ln "**$($userProp.Name)**"
+            ln ''
+            ln '| キーパス | 名前 | 値 |'
+            ln '|---------|------|-----|'
+            foreach ($p in $allP) {
+                $ks = $p.KeyPath -replace 'HKEY_USERS\\S-[0-9-]+\\SOFTWARE\\Policies\\', ''
+                $ks = $ks         -replace 'HKEY_USERS\\S-[0-9-]+\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\', ''
+                ln "| $(fesc $ks -MaxLen 60) | $(fesc $p.Name -MaxLen 50) | $(fesc $p.Value -MaxLen 60) |"
+            }
+        }
+        if (-not $hasAnyUser) { ln '(なし)' }
+    } else { nodata }
+
+    # ═══════════════════════════════════════════════════════
+    # 15. 環境変数
+    # ═══════════════════════════════════════════════════════
+
+    h2 '15. 環境変数'
+
+    $envVars = Read-JsonSafe (Join-Path $currentAuditPath '10c_environment_variables.json')
+
+    h3 'システム環境変数'
+    if ($envVars -and $envVars.System) {
+        ln '| 変数名 | 値 |'
+        ln '|--------|-----|'
+        foreach ($v in @($envVars.System) | Sort-Object Name) {
+            ln "| $(fesc $v.Name) | $(fesc $v.Value -MaxLen 100) |"
+        }
+    } else { nodata }
+
+    h3 'ユーザー環境変数'
+    if ($envVars -and $envVars.User) {
+        ln '| 変数名 | 値 |'
+        ln '|--------|-----|'
+        foreach ($v in @($envVars.User) | Sort-Object Name) {
+            ln "| $(fesc $v.Name) | $(fesc $v.Value -MaxLen 100) |"
+        }
+    } else { nodata }
+
+    # ═══════════════════════════════════════════════════════
+    # 16. ロケール・言語
+    # ═══════════════════════════════════════════════════════
+
+    h2 '16. ロケール・言語'
+
+    $locale = Read-JsonSafe (Join-Path $currentAuditPath '13_locale_language.json')
+    if ($locale) {
+        ln '| 項目 | 値 |'
+        ln '|------|-----|'
+        ln "| タイムゾーン | $(fesc $locale.TimeZoneDisplay) |"
+        ln "| カルチャ | $(fesc $locale.Culture) |"
+        ln "| UIカルチャ | $(fesc $locale.UICulture) |"
+        ln "| システムロケール | $(fesc $locale.SystemLocale) |"
+        ln "| 日付フォーマット | $(fesc $locale.DateFormat) |"
+        ln "| 時刻フォーマット | $(fesc $locale.TimeFormat) |"
+        ln "| 週の開始日 | $(fesc $locale.FirstDayOfWeek) |"
+        ln "| 所在地 | $(fesc $locale.HomeLocation) |"
+        if ($locale.InputLanguages -and @($locale.InputLanguages).Count -gt 0) {
+            ln ''
+            ln '**入力言語**'
+            ln ''
+            ln '| 言語 | タグ |'
+            ln '|------|------|'
+            foreach ($lang in @($locale.InputLanguages)) {
+                ln "| $(fesc $lang.Autonym) | $(fesc $lang.LanguageTag) |"
+            }
+        }
+    } else { nodata }
+
+    # ═══════════════════════════════════════════════════════
+    # 17. プリンター
+    # ═══════════════════════════════════════════════════════
+
+    h2 '17. プリンター'
+
+    $printers = Read-JsonSafe (Join-Path $currentAuditPath '17b_printers.json')
+    if ($printers) {
+        ln '| プリンター名 | ドライバー | ポート | 共有 |'
+        ln '|-----------|----------|--------|------|'
+        foreach ($p in @($printers)) {
+            $shared = Bool-Str $p.Shared '共有' '非共有'
+            ln "| $(fesc $p.Name) | $(fesc $p.DriverName) | $(fesc $p.PortName) | $shared |"
+        }
+    } else { nodata }
+
+    # ═══════════════════════════════════════════════════════
+    # 18. デバイスドライバー
+    # ═══════════════════════════════════════════════════════
+
+    h2 '18. デバイスドライバー'
+
+    $drivers = Read-JsonSafe (Join-Path $currentAuditPath '16_drivers.json')
+    if ($drivers) {
+        $validDrivers = @($drivers) | Where-Object { $_.DeviceName } | Sort-Object DeviceName
+        if ($validDrivers.Count -gt 0) {
+            ln '| デバイス名 | ドライバーバージョン | メーカー | 署名 | INF |'
+            ln '|-----------|------------------|---------|------|-----|'
+            foreach ($d in $validDrivers) {
+                $signed = Bool-Str $d.IsSigned '済' 'なし'
+                ln "| $(fesc $d.DeviceName -MaxLen 50) | $(fesc $d.DriverVersion) | $(fesc $d.Manufacturer -MaxLen 30) | $signed | $(fesc $d.InfName) |"
+            }
+        } else { ln '(デバイス名あり ドライバーなし)' }
+    } else { nodata }
+
+    # ═══════════════════════════════════════════════════════
+    # 19. フォント
+    # ═══════════════════════════════════════════════════════
+
+    h2 '19. フォント'
+
+    $fonts = Read-JsonSafe (Join-Path $currentAuditPath '17_fonts.json')
+    if ($fonts) {
+        $sortedFonts = @($fonts) | Sort-Object Name
+        ln '| フォント名 | 種別 | サイズ (KB) |'
+        ln '|-----------|------|-----------|'
+        foreach ($f in $sortedFonts) {
+            ln "| $(fesc $f.Name) | $(fesc $f.Extension) | $(fv $f.SizeKB) |"
+        }
     } else { nodata }
 
     # ─────────────────────────────────────────────────

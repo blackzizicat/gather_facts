@@ -8,7 +8,11 @@
       "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\kshinjo\\\\work\\\\gather_facts\" -Recurse -Force)",
       "Bash(Select-Object FullName, PSIsContainer)",
       "Bash(Sort-Object FullName)",
-      "PowerShell(cd C:\\\\Users\\\\kshinjo\\\\work\\\\gather_facts; powershell -ExecutionPolicy Bypass -File .\\\\Create-ParameterSheet.ps1 2>&1)"
+      "PowerShell(cd C:\\\\Users\\\\kshinjo\\\\work\\\\gather_facts; powershell -ExecutionPolicy Bypass -File .\\\\Create-ParameterSheet.ps1 2>&1)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\kshinjo\\\\work\\\\gather_facts\\\\WindowsEnvAudit_win11\" -Filter \"*.json\")",
+      "Bash(Select-Object Name)",
+      "Bash(Sort-Object Name)",
+      "PowerShell(Select-String *)"
     ]
   }
 }
