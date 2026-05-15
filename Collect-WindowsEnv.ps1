@@ -89,7 +89,7 @@ if ($isServer -and $isAdmin -and $serverRoles) {
 $osEditionLabel = if ($isServer) { 'Windows Server 環境' } else { 'Windows 環境' }
 $indexLines = @("# $osEditionLabel 調査レポート", "生成日時: $(Get-Date)", "実行ユーザー: $env:USERNAME", "管理者権限: $isAdmin", "出力先: $outDir", "")
 $progress   = 0
-$total      = 22 + $serverStepCount
+$total      = 21 + $serverStepCount
 
 function Write-Step {
     param($n, [string]$name)
@@ -2049,58 +2049,6 @@ $f = Save-Json "20_scripts_manifest.json" $scriptManifest
 Append-Index "20. スクリプト・バッチファイル実体（コピー先: 20_scripts/）" $f
 
 # ─────────────────────────────────────────────
-# 21. システム情報（msinfo32 システムの要約）
-# ─────────────────────────────────────────────
-Write-Step 21 "システム情報（msinfo32 システムの要約）"
-
-try {
-    $tempReport = Join-Path $env:TEMP "msinfo32_report_$timestamp.txt"
-    $proc = Start-Process -FilePath "$env:SystemRoot\System32\msinfo32.exe" `
-        -ArgumentList "/report `"$tempReport`"" -PassThru -WindowStyle Hidden -ErrorAction Stop
-    $waited = $proc.WaitForExit(60000)
-    if (-not $waited) { try { $proc.Kill() } catch {} }
-
-    if (Test-Path $tempReport) {
-        $rawLines = [System.IO.File]::ReadAllLines($tempReport, [System.Text.Encoding]::Unicode)
-
-        # システムの要約セクション（日本語・英語両対応）を抽出
-        $inSection = $false
-        $sectionData = [ordered]@{}
-        foreach ($line in $rawLines) {
-            if ($line -match '^\[(システムの要約|System Summary)\]') {
-                $inSection = $true
-                continue
-            }
-            if ($inSection -and $line -match '^\[') { break }
-            if ($inSection -and $line -match '^(.+?)\t(.*)$') {
-                $key = $matches[1].Trim()
-                $val = $matches[2].Trim()
-                # 列ヘッダー行（"項目" / "Item"）はスキップ
-                if ($key -ne '項目' -and $key -ne 'Item') {
-                    $sectionData[$key] = $val
-                }
-            }
-        }
-
-        Remove-Item $tempReport -Force -ErrorAction SilentlyContinue
-
-        if ($sectionData.Count -gt 0) {
-            $f = Save-Json "21_msinfo32_summary.json" $sectionData
-        } else {
-            $f = Save-Json "21_msinfo32_summary.json" $null `
-                'msinfo32 の出力からシステムの要約セクションを取得できませんでした。'
-        }
-    } else {
-        $f = Save-Json "21_msinfo32_summary.json" $null `
-            "msinfo32 /report の出力ファイルが生成されませんでした。$env:SystemRoot\System32\msinfo32.exe が存在するか確認してください。"
-    }
-} catch {
-    $errMsg = "$_"
-    $f = Save-Json "21_msinfo32_summary.json" $null "msinfo32 の実行に失敗しました: $errMsg"
-}
-Append-Index "21. システム情報（msinfo32 システムの要約）" $f
-
-# ─────────────────────────────────────────────
 # S01〜S08. サーバー専用ステップ
 #           Windows Server & 管理者権限 & 役割検出済みの場合のみ実行
 # ─────────────────────────────────────────────
@@ -2496,7 +2444,7 @@ if ($isServer -and $isAdmin -and $serverRoles) {
 # ─────────────────────────────────────────────
 # 22. 完了
 # ─────────────────────────────────────────────
-Write-Step 22 "完了"
+Write-Step 21 "完了"
 
 # ─────────────────────────────────────────────
 # インデックスファイル生成
