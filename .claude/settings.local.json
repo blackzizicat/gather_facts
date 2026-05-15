@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\kshinjo\\\\work\\\\gather_facts\" -Recurse -File)",
+      "Bash(Select-Object FullName)",
+      "Bash(ConvertTo-Json)",
+      "Bash(Select-Object -ExpandProperty FullName)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\kshinjo\\\\work\\\\gather_facts\" -Recurse -Force)",
+      "Bash(Select-Object FullName, PSIsContainer)",
+      "Bash(Sort-Object FullName)",
+      "PowerShell(cd C:\\\\Users\\\\kshinjo\\\\work\\\\gather_facts; powershell -ExecutionPolicy Bypass -File .\\\\Create-ParameterSheet.ps1 2>&1)"
+    ]
+  }
+}
