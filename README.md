@@ -1,8 +1,10 @@
-# Windows 11 環境調査 - 調査項目リスト
+# Windows 環境調査ツール - 調査項目リスト
 
 ## 目的
-現在のWindows 11環境を一から再構築できるよう、設定・構成情報を網羅的に収集する。
+Windows クライアント・サーバー環境の設定・構成情報を網羅的に収集する。
 組織管理下のマシンにおける制御・制限設定の把握も目的に含む。
+Windows Server では、インストールされている役割（AD DS・Hyper-V・IIS・DNS・DHCP・FS・RDS）に応じて
+専用の情報を追加収集する（S01〜S08 ステップ）。
 
 ---
 
@@ -128,7 +130,7 @@
 - インストール済みデバイスドライバー一覧（バージョン・署名状態・製造元）
 - **デバイス ハードウェア ID 一覧**（`Win32_PnPEntity` から HardwareID / CompatibleID を取得）
 - **専門周辺機器の詳細情報**（キーワード・USB VID フィルタで絞り込み、ドライバー情報を結合）
-  - 対象カテゴリ: ペンタブレット / デジタイザー（Wacom / Huion / XP-Pen / Gaomon 等）、オーディオインターフェース・MIDIコントローラー（Focusrite / MOTU / Universal Audio / Roland / Korg 等）、映像キャプチャ・配信機器（Elgato / Blackmagic / AVerMedia 等）
+  - 対象カテゴリ: オーディオ機器・映像機器・デジタイザー等の専門USBデバイス（Focusrite / MOTU / Elgato / Blackmagic / AVerMedia / Wacom / Huion 等）
   - デバイス情報・ドライバー情報の結合
   - ベンダー固有レジストリキー（型番・設定情報）
 
@@ -227,7 +229,7 @@
 | `15b_network_drives.json` | ネットワークドライブ一覧 |
 | `16_drivers.json` | デバイスドライバー一覧 |
 | `16b_device_hardware_ids.json` | デバイス ハードウェア ID 一覧（Win32_PnPEntity） |
-| `16c_specialized_devices.json` | 専門周辺機器詳細（ペンタブ／オーディオI/F／映像キャプチャ等） |
+| `16c_specialized_devices.json` | 専門周辺機器詳細（オーディオ・映像・デジタイザー等の専門USBデバイス） |
 | `17_fonts.json` | フォント一覧 |
 | `17b_printers.json` | プリンター一覧 |
 | `18_powershell_profiles.txt` | PowerShell プロファイル内容 |
@@ -243,6 +245,14 @@
 | `20_scripts/` | 収集したスクリプト・バッチファイル格納ディレクトリ |
 | `20_scripts_manifest.json` | スクリプト・バッチファイル収集マニフェスト（収集元パス・カテゴリ・サイズ等） |
 | `21_msinfo32_summary.json` | msinfo32 システムの要約（OS・プロセッサ・メモリ・BIOS 等） |
+| `S01_server_roles.json` | サーバー役割・機能一覧（Windows Server & 管理者権限時のみ） |
+| `S02_active_directory.json` | Active Directory 情報（AD DS 役割インストール時のみ） |
+| `S03_hyperv.json` | Hyper-V 情報（Hyper-V 役割インストール時のみ） |
+| `S04_iis.json` | IIS 情報（Web Server 役割インストール時のみ） |
+| `S05_dns.json` | DNS サーバー情報（DNS 役割インストール時のみ） |
+| `S06_dhcp.json` | DHCP サーバー情報（DHCP 役割インストール時のみ） |
+| `S07_fileserver.json` | ファイルサーバー情報（FS-FileServer 役割インストール時のみ） |
+| `S08_rds.json` | RDS 情報（Remote Desktop Services 役割インストール時のみ） |
 
 ---
 
@@ -303,6 +313,15 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 カテゴリごとに JSON / テキストファイルが保存されます。
 
 ## 注意事項
+
+### Windows Server での実行について
+
+- **管理者権限必須**: サーバー役割の検出および S01〜S08 ステップの実行には管理者権限が必須
+- **OS 自動判定**: OS の Caption に "Server" が含まれる場合を Windows Server として扱い、サーバー専用ステップを実行する
+- **Get-WindowsFeature**: Windows Server 専用コマンド。クライアント OS では実行されない
+- **ActiveDirectory モジュール**: `Get-ADDomain` 等の実行には ActiveDirectory モジュールが必要（AD DS インストールで自動追加、またはRSATで追加）
+- **Hyper-V**: `Get-VM` 等は Hyper-V 役割インストール済みの場合のみ実行
+- **IIS**: IISAdministration モジュール（IIS 10.0+、Windows Server 2016+）を優先し、なければ WebAdministration モジュールにフォールバック
 
 - **管理者権限推奨**: BitLocker・ファイアウォールルール・secedit・デフォルトユーザープロファイルのレジストリハイブ読み取りには管理者権限が必要
 - **ドメイン参加マシン**: GPO 情報・ドメインログオンスクリプト・フォルダリダイレクト等の組織管理情報が追加で取得される

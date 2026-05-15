@@ -1,12 +1,14 @@
 ﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
-    Windows 11 環境を一から再構築するための設定情報を網羅的に収集する
+    Windows 環境の設定情報を網羅的に収集する（クライアント・サーバー両対応）
 
 .DESCRIPTION
     システム設定・インストール済みソフト・ネットワーク・セキュリティ等を調査し、
     カテゴリごとにファイルへ保存する。
     管理者権限で実行すると収集できる情報が増える。
+    Windows Server では、インストールされている役割（AD DS・Hyper-V・IIS・DNS・DHCP・FS・RDS）に応じて
+    専用の情報を追加収集する（S01〜S08 ステップ）。
 
 .PARAMETER OutputPath
     出力先ディレクトリ（省略時はスクリプトと同じ場所）
@@ -42,14 +44,57 @@ New-Item -ItemType Directory -Path $outDir -Force | Out-Null
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
     [Security.Principal.WindowsBuiltInRole]::Administrator)
 
-$indexLines = @("# Windows 11 環境調査レポート", "生成日時: $(Get-Date)", "実行ユーザー: $env:USERNAME", "管理者権限: $isAdmin", "出力先: $outDir", "")
+# ─── OS種別・サーバー役割の検出 ───
+$osInfo   = Get-CimInstance Win32_OperatingSystem   # Step01でも再利用
+$isServer = $osInfo.Caption -match 'Server'
+
+$isADDS        = $false
+$isHyperV      = $false
+$isIIS         = $false
+$isDNS         = $false
+$isDHCP        = $false
+$isFileServer  = $false
+$isRDS         = $false
+$isPrintServer = $false
+$serverRoles   = $null
+
+if ($isServer -and $isAdmin) {
+    $serverRoles = Get-WindowsFeature -ErrorAction SilentlyContinue |
+                   Where-Object { $_.Installed }
+    if ($serverRoles) {
+        $roleNames     = $serverRoles.Name
+        $isADDS        = $roleNames -contains 'AD-Domain-Services'
+        $isHyperV      = $roleNames -contains 'Hyper-V'
+        $isIIS         = $roleNames -contains 'Web-Server'
+        $isDNS         = $roleNames -contains 'DNS'
+        $isDHCP        = $roleNames -contains 'DHCP'
+        $isFileServer  = $roleNames -contains 'FS-FileServer'
+        $isRDS         = $roleNames -contains 'Remote-Desktop-Services'
+        $isPrintServer = $roleNames -contains 'Print-Services'
+    }
+}
+
+$serverStepCount = 0
+if ($isServer -and $isAdmin -and $serverRoles) {
+    $serverStepCount = 1   # S01 は常に
+    if ($isADDS)       { $serverStepCount++ }
+    if ($isHyperV)     { $serverStepCount++ }
+    if ($isIIS)        { $serverStepCount++ }
+    if ($isDNS)        { $serverStepCount++ }
+    if ($isDHCP)       { $serverStepCount++ }
+    if ($isFileServer) { $serverStepCount++ }
+    if ($isRDS)        { $serverStepCount++ }
+}
+
+$osEditionLabel = if ($isServer) { 'Windows Server 環境' } else { 'Windows 環境' }
+$indexLines = @("# $osEditionLabel 調査レポート", "生成日時: $(Get-Date)", "実行ユーザー: $env:USERNAME", "管理者権限: $isAdmin", "出力先: $outDir", "")
 $progress   = 0
-$total      = 22
+$total      = 22 + $serverStepCount
 
 function Write-Step {
-    param([int]$n, [string]$name)
-    $script:progress = $n
-    Write-Progress -Activity "環境調査中" -Status "[$n/$total] $name" -PercentComplete ([int]($n / $total * 100))
+    param($n, [string]$name)
+    if ($n -is [int]) { $script:progress = $n } else { $script:progress++ }
+    Write-Progress -Activity "環境調査中" -Status "[$n/$total] $name" -PercentComplete ([int]($script:progress / $total * 100))
     Write-Host "[$n/$total] $name ..." -ForegroundColor Cyan
 }
 
@@ -124,7 +169,7 @@ function Try-Command {
 # ─────────────────────────────────────────────
 Write-Step 1 "システム基本情報"
 
-$osInfo  = Get-CimInstance Win32_OperatingSystem
+# $osInfo は初期化セクションで取得済み
 $csInfo  = Get-CimInstance Win32_ComputerSystem
 $cpuInfo = Get-CimInstance Win32_Processor
 $gpuInfo = Get-CimInstance Win32_VideoController
@@ -181,6 +226,7 @@ $systemInfo = [ordered]@{
         Product      = $mbInfo.Product
         SerialNumber = $mbInfo.SerialNumber
     }
+    IsServer = $isServer
 }
 $f = Save-Json "01_system_info.json" $systemInfo
 Append-Index "01. システム基本情報" $f
@@ -1552,8 +1598,7 @@ Append-Index "16b. デバイス ハードウェア ID 一覧" $f
 # ─────────────────────────────────────────────
 # 16c. 専門周辺機器の詳細情報
 #      キーワード/VIDフィルタで関連デバイスを絞り込み、ドライバー情報を結合
-#      ペンタブレット / オーディオインターフェース / MIDIコントローラー /
-#      映像キャプチャ / 配信機器 等の主要メーカーに対応
+#      専門USBデバイス（デジタイザー・オーディオ機器・映像機器等）のキーワード検出
 # ─────────────────────────────────────────────
 
 # 検索キーワード（デバイス名・メーカー・サービス名・DeviceID対象）
@@ -1639,7 +1684,7 @@ $specializedDeviceInfo = [ordered]@{
     VendorRegistry     = $vendorRegistry
 }
 $f = Save-Json "16c_specialized_devices.json" $specializedDeviceInfo
-Append-Index "16c. 専門周辺機器詳細（ペンタブ／オーディオI/F／映像キャプチャ等）" $f
+Append-Index "16c. 専門周辺機器詳細（オーディオ・映像・デジタイザー等）" $f
 
 # ─────────────────────────────────────────────
 # 17. フォント・プリンター
@@ -2056,6 +2101,399 @@ try {
 Append-Index "21. システム情報（msinfo32 システムの要約）" $f
 
 # ─────────────────────────────────────────────
+# S01〜S08. サーバー専用ステップ
+#           Windows Server & 管理者権限 & 役割検出済みの場合のみ実行
+# ─────────────────────────────────────────────
+if ($isServer -and $isAdmin -and $serverRoles) {
+
+    # S01. サーバー役割・機能一覧
+    Write-Step "S01" "サーバー役割・機能一覧"
+    $roleData = @($serverRoles | ForEach-Object {
+        [ordered]@{
+            Name         = $_.Name
+            DisplayName  = $_.DisplayName
+            Installed    = $_.Installed
+            InstallState = $_.InstallState.ToString()
+            FeatureType  = $_.FeatureType.ToString()
+            SubFeatures  = @($_.SubFeatures)
+        }
+    })
+    $f = Save-Json "S01_server_roles.json" $roleData
+    Append-Index "S01. サーバー役割・機能一覧" $f
+
+    # S02. Active Directory 情報
+    if ($isADDS) {
+        Write-Step "S02" "Active Directory 情報"
+        $adAvail = Get-Module -ListAvailable -Name ActiveDirectory -ErrorAction SilentlyContinue
+        if ($adAvail) {
+            Import-Module ActiveDirectory -ErrorAction SilentlyContinue
+
+            $adDomain = try {
+                $d = Get-ADDomain -ErrorAction Stop
+                [ordered]@{
+                    Name                 = $d.Name
+                    DNSRoot              = $d.DNSRoot
+                    NetBIOSName          = $d.NetBIOSName
+                    DomainMode           = $d.DomainMode.ToString()
+                    PDCEmulator          = $d.PDCEmulator
+                    RIDMaster            = $d.RIDMaster
+                    InfrastructureMaster = $d.InfrastructureMaster
+                }
+            } catch { "取得失敗: $_" }
+
+            $adForest = try {
+                $fst = Get-ADForest -ErrorAction Stop
+                [ordered]@{
+                    Name               = $fst.Name
+                    ForestMode         = $fst.ForestMode.ToString()
+                    SchemaMaster       = $fst.SchemaMaster
+                    DomainNamingMaster = $fst.DomainNamingMaster
+                }
+            } catch { "取得失敗: $_" }
+
+            $adDCs = try {
+                @(Get-ADDomainController -Filter * -ErrorAction Stop | ForEach-Object {
+                    [ordered]@{
+                        Name            = $_.Name
+                        IPv4Address     = $_.IPv4Address
+                        Site            = $_.Site
+                        IsGlobalCatalog = $_.IsGlobalCatalog
+                        IsReadOnly      = $_.IsReadOnly
+                        OperatingSystem = $_.OperatingSystem
+                    }
+                })
+            } catch { @() }
+
+            $adSites = try {
+                @(Get-ADReplicationSite -Filter * -ErrorAction Stop | Select-Object Name, Description)
+            } catch { @() }
+
+            $adSubnets = try {
+                @(Get-ADReplicationSubnet -Filter * -ErrorAction Stop | Select-Object Name, Site, Location)
+            } catch { @() }
+
+            $adGPOs = try {
+                if (Get-Module -ListAvailable -Name GroupPolicy -ErrorAction SilentlyContinue) {
+                    Import-Module GroupPolicy -ErrorAction SilentlyContinue
+                    @(Get-GPO -All -ErrorAction Stop | ForEach-Object {
+                        [ordered]@{
+                            DisplayName      = $_.DisplayName
+                            GpoStatus        = $_.GpoStatus.ToString()
+                            ModificationTime = $_.ModificationTime
+                        }
+                    })
+                } else { "GroupPolicy モジュール未インストール" }
+            } catch { "取得失敗: $_" }
+
+            $adOUCount    = try { (Get-ADOrganizationalUnit -Filter * -ErrorAction Stop | Measure-Object).Count } catch { "取得失敗: $_" }
+            $adUserCount  = try { (Get-ADUser -Filter * -ErrorAction Stop | Measure-Object).Count }  catch { "取得失敗: $_" }
+            $adGroupCount = try { (Get-ADGroup -Filter * -ErrorAction Stop | Measure-Object).Count } catch { "取得失敗: $_" }
+
+            $adInfo = [ordered]@{
+                Domain            = $adDomain
+                Forest            = $adForest
+                DomainControllers = $adDCs
+                Sites             = $adSites
+                Subnets           = $adSubnets
+                GPOs              = $adGPOs
+                OUCount           = $adOUCount
+                UserCount         = $adUserCount
+                GroupCount        = $adGroupCount
+            }
+        } else {
+            $adInfo = [ordered]@{
+                _note = 'ActiveDirectory モジュールがインストールされていません。RSAT: AD DS and AD LDS Tools をインストールしてください。'
+            }
+        }
+        $f = Save-Json "S02_active_directory.json" $adInfo
+        Append-Index "S02. Active Directory 情報" $f
+    }
+
+    # S03. Hyper-V 情報
+    if ($isHyperV) {
+        Write-Step "S03" "Hyper-V 情報"
+
+        $hvHost = try {
+            $h = Get-VMHost -ErrorAction Stop
+            [ordered]@{
+                Name                      = $h.Name
+                VirtualHardDiskPath       = $h.VirtualHardDiskPath
+                VirtualMachinePath        = $h.VirtualMachinePath
+                NumaSpanningEnabled       = $h.NumaSpanningEnabled
+                EnableEnhancedSessionMode = $h.EnableEnhancedSessionMode
+            }
+        } catch { "取得失敗: $_" }
+
+        $hvVMs = try {
+            @(Get-VM -ErrorAction Stop | ForEach-Object {
+                [ordered]@{
+                    Name       = $_.Name
+                    State      = $_.State.ToString()
+                    Generation = $_.Generation
+                    MemoryGB   = [math]::Round($_.MemoryAssigned / 1GB, 2)
+                    CPUCount   = $_.ProcessorCount
+                    Uptime     = $_.Uptime.ToString()
+                    Version    = $_.Version
+                    HardDrives = @($_.HardDrives | ForEach-Object { $_.Path })
+                }
+            })
+        } catch { @() }
+
+        $hvSwitches = try {
+            @(Get-VMSwitch -ErrorAction Stop | ForEach-Object {
+                [ordered]@{
+                    Name       = $_.Name
+                    SwitchType = $_.SwitchType.ToString()
+                    NetAdapter = $_.NetAdapterInterfaceDescription
+                }
+            })
+        } catch { @() }
+
+        $hvCheckpoints = try {
+            @(Get-VMCheckpoint -VMName * -ErrorAction Stop | ForEach-Object {
+                [ordered]@{
+                    VMName               = $_.VMName
+                    Name                 = $_.Name
+                    CreationTime         = $_.CreationTime
+                    ParentCheckpointName = $_.ParentCheckpointName
+                }
+            })
+        } catch { @() }
+
+        $hvReplication = try {
+            @(Get-VMReplication -ErrorAction Stop | ForEach-Object {
+                [ordered]@{ VMName=$_.VMName; State=$_.State.ToString(); Mode=$_.Mode.ToString() }
+            })
+        } catch { @() }
+
+        $hvInfo = [ordered]@{
+            VMHost      = $hvHost
+            VMs         = $hvVMs
+            Switches    = $hvSwitches
+            Checkpoints = $hvCheckpoints
+            Replication = $hvReplication
+        }
+        $f = Save-Json "S03_hyperv.json" $hvInfo
+        Append-Index "S03. Hyper-V 情報" $f
+    }
+
+    # S04. IIS 情報
+    if ($isIIS) {
+        Write-Step "S04" "IIS 情報"
+
+        $iisSites = try {
+            if (Get-Module -ListAvailable -Name IISAdministration -ErrorAction SilentlyContinue) {
+                Import-Module IISAdministration -ErrorAction SilentlyContinue
+                @(Get-IISSite -ErrorAction Stop | ForEach-Object {
+                    [ordered]@{
+                        Name         = $_.Name
+                        Id           = $_.Id
+                        State        = $_.State.ToString()
+                        Bindings     = @($_.Bindings.Collection | ForEach-Object {
+                            [ordered]@{ Protocol=$_.Protocol; BindingInformation=$_.BindingInformation }
+                        })
+                        PhysicalPath = $_.Applications['/'].VirtualDirectories['/'].PhysicalPath
+                    }
+                })
+            } else {
+                Import-Module WebAdministration -ErrorAction SilentlyContinue
+                @(Get-Website -ErrorAction Stop | ForEach-Object {
+                    [ordered]@{ Name=$_.Name; Id=$_.Id; State=$_.State; PhysicalPath=$_.PhysicalPath }
+                })
+            }
+        } catch { @() }
+
+        $iisAppPools = try {
+            if (Get-Module -Name IISAdministration -ErrorAction SilentlyContinue) {
+                @(Get-IISAppPool -ErrorAction Stop | ForEach-Object {
+                    [ordered]@{
+                        Name            = $_.Name
+                        State           = $_.State.ToString()
+                        ManagedRuntime  = $_.ManagedRuntimeVersion
+                        ManagedPipeline = $_.ManagedPipelineMode.ToString()
+                    }
+                })
+            } else {
+                @(Get-WebConfiguration 'system.applicationHost/applicationPools/add' -ErrorAction Stop |
+                  Select-Object Name, State, ManagedRuntimeVersion, ManagedPipelineMode)
+            }
+        } catch { @() }
+
+        $iisModules = try {
+            @(Get-WebConfiguration '//system.webServer/modules/add' -ErrorAction Stop |
+              ForEach-Object { $_.Name })
+        } catch { @() }
+
+        $iisInfo = [ordered]@{
+            Sites    = $iisSites
+            AppPools = $iisAppPools
+            Modules  = $iisModules
+        }
+        $f = Save-Json "S04_iis.json" $iisInfo
+        Append-Index "S04. IIS 情報" $f
+    }
+
+    # S05. DNS サーバー情報
+    if ($isDNS) {
+        Write-Step "S05" "DNS サーバー情報"
+
+        $dnsZones = try {
+            @(Get-DnsServerZone -ErrorAction Stop | ForEach-Object {
+                [ordered]@{
+                    ZoneName            = $_.ZoneName
+                    ZoneType            = $_.ZoneType.ToString()
+                    IsDsIntegrated      = $_.IsDsIntegrated
+                    IsReverseLookupZone = $_.IsReverseLookupZone
+                    DynamicUpdate       = $_.DynamicUpdate.ToString()
+                }
+            })
+        } catch { @() }
+
+        $dnsFwds = try {
+            $fwd = Get-DnsServerForwarder -ErrorAction Stop
+            [ordered]@{ IPAddresses=@($fwd.IPAddress.IPAddressToString); UseRootHint=$fwd.UseRootHint }
+        } catch { "取得失敗: $_" }
+
+        $dnsCondFwds = try {
+            @(Get-DnsServerConditionalForwarder -ErrorAction Stop | ForEach-Object {
+                [ordered]@{ Name=$_.ZoneName; MasterServers=@($_.MasterServers.IPAddressToString) }
+            })
+        } catch { @() }
+
+        $dnsInfo = [ordered]@{
+            Zones                = $dnsZones
+            Forwarders           = $dnsFwds
+            ConditionalForwarders = $dnsCondFwds
+        }
+        $f = Save-Json "S05_dns.json" $dnsInfo
+        Append-Index "S05. DNS サーバー情報" $f
+    }
+
+    # S06. DHCP サーバー情報
+    if ($isDHCP) {
+        Write-Step "S06" "DHCP サーバー情報"
+
+        $dhcpScopes = try {
+            @(Get-DhcpServerv4Scope -ErrorAction Stop | ForEach-Object {
+                [ordered]@{
+                    ScopeId    = $_.ScopeId
+                    SubnetMask = $_.SubnetMask
+                    StartRange = $_.StartRange
+                    EndRange   = $_.EndRange
+                    State      = $_.State.ToString()
+                    Name       = $_.Name
+                }
+            })
+        } catch { @() }
+
+        $dhcpStats = try {
+            $stat = Get-DhcpServerv4Statistics -ErrorAction Stop
+            [ordered]@{
+                TotalAddresses     = $stat.TotalAddresses
+                AddressesInUse     = $stat.AddressesInUse
+                AddressesAvailable = $stat.AddressesAvailable
+                PercentageInUse    = $stat.PercentageInUse
+            }
+        } catch { "取得失敗: $_" }
+
+        $dhcpReservations = try {
+            @(Get-DhcpServerv4Scope -ErrorAction Stop | ForEach-Object {
+                $sid = $_.ScopeId
+                Get-DhcpServerv4Reservation -ScopeId $sid -ErrorAction SilentlyContinue |
+                ForEach-Object {
+                    [ordered]@{ ScopeId=$sid; IPAddress=$_.IPAddress; ClientId=$_.ClientId; Name=$_.Name }
+                }
+            })
+        } catch { @() }
+
+        $dhcpInfo = [ordered]@{
+            Scopes       = $dhcpScopes
+            Statistics   = $dhcpStats
+            Reservations = $dhcpReservations
+        }
+        $f = Save-Json "S06_dhcp.json" $dhcpInfo
+        Append-Index "S06. DHCP サーバー情報" $f
+    }
+
+    # S07. ファイルサーバー情報
+    if ($isFileServer) {
+        Write-Step "S07" "ファイルサーバー情報"
+
+        $fsShares = try {
+            @(Get-SmbShare -ErrorAction Stop | ForEach-Object {
+                $perm = Get-SmbShareAccess -Name $_.Name -ErrorAction SilentlyContinue
+                [ordered]@{
+                    Name        = $_.Name
+                    Path        = $_.Path
+                    Description = $_.Description
+                    ShareType   = $_.ShareType.ToString()
+                    Permissions = @($perm | ForEach-Object {
+                        [ordered]@{ AccountName=$_.AccountName; AccessRight=$_.AccessRight.ToString() }
+                    })
+                }
+            })
+        } catch { @() }
+
+        $fsDFS = if ($roleNames -contains 'FS-DFS-Namespace') {
+            try {
+                [ordered]@{
+                    Roots   = @(Get-DfsnRoot -ErrorAction Stop | Select-Object Path, State, Type)
+                    Folders = @(Get-DfsnFolder -Path * -ErrorAction Stop | Select-Object Path, State)
+                }
+            } catch { "取得失敗: $_" }
+        } else { "DFS 名前空間 未インストール" }
+
+        $fsQuotas = if ($roleNames -contains 'FS-Resource-Manager') {
+            try {
+                @(Get-FsrmQuota -ErrorAction Stop | ForEach-Object {
+                    [ordered]@{ Path=$_.Path; Size=$_.Size; Usage=$_.Usage }
+                })
+            } catch { "取得失敗: $_" }
+        } else { "ファイルサーバーリソースマネージャー 未インストール" }
+
+        $fsInfo = [ordered]@{
+            Shares = $fsShares
+            DFS    = $fsDFS
+            Quotas = $fsQuotas
+        }
+        $f = Save-Json "S07_fileserver.json" $fsInfo
+        Append-Index "S07. ファイルサーバー情報" $f
+    }
+
+    # S08. RDS 情報
+    if ($isRDS) {
+        Write-Step "S08" "RDS 情報"
+
+        $rdsCollections = try {
+            @(Get-RDSessionCollection -ErrorAction Stop | ForEach-Object {
+                [ordered]@{
+                    CollectionName        = $_.CollectionName
+                    CollectionDescription = $_.CollectionDescription
+                }
+            })
+        } catch { "取得失敗（RD Connection Broker 役割が必要）: $_" }
+
+        $rdsLicenseMode = try {
+            $licReg = Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\RCM\Licensing Core' -ErrorAction Stop
+            $licReg.LicensingMode
+        } catch { "取得失敗: $_" }
+
+        $rdsGracePeriod = try {
+            $gpReg = Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\RCM\GracePeriod' -ErrorAction Stop
+            $gpReg | ConvertTo-Json -Depth 2
+        } catch { "取得失敗: $_" }
+
+        $rdsInfo = [ordered]@{
+            Collections    = $rdsCollections
+            LicenseMode    = $rdsLicenseMode
+            GracePeriodEnd = $rdsGracePeriod
+        }
+        $f = Save-Json "S08_rds.json" $rdsInfo
+        Append-Index "S08. RDS 情報" $f
+    }
+}
+
+# ─────────────────────────────────────────────
 # 22. 完了
 # ─────────────────────────────────────────────
 Write-Step 22 "完了"
@@ -2184,7 +2622,28 @@ if (-not $isAdmin) {
     Write-Host "   - BitLocker 状態"
     Write-Host "   - ファイアウォールカスタムルール"
     Write-Host "   - 一部の WMI 情報"
+    if ($isServer) {
+        Write-Host "   - サーバー役割・機能一覧"
+        Write-Host "   - AD/Hyper-V/IIS/DNS/DHCP 等のサーバー専用情報"
+    }
     Write-Host "   管理者権限で再実行すると完全な情報を収集できます。" -ForegroundColor Yellow
+}
+if ($isServer) {
+    Write-Host ""
+    Write-Host " サーバーOS検出: $($osInfo.Caption)" -ForegroundColor Cyan
+    if ($serverRoles) {
+        Write-Host " インストール済み主要役割:"
+        if ($isADDS)       { Write-Host "   - Active Directory Domain Services" }
+        if ($isHyperV)     { Write-Host "   - Hyper-V" }
+        if ($isIIS)        { Write-Host "   - IIS (Web Server)" }
+        if ($isDNS)        { Write-Host "   - DNS Server" }
+        if ($isDHCP)       { Write-Host "   - DHCP Server" }
+        if ($isFileServer) { Write-Host "   - File Server" }
+        if ($isRDS)        { Write-Host "   - Remote Desktop Services" }
+        if ($isPrintServer){ Write-Host "   - Print Server" }
+    } elseif (-not $isAdmin) {
+        Write-Host " （役割一覧の取得には管理者権限が必要です）" -ForegroundColor Yellow
+    }
 }
 Write-Host ""
 Write-Host " インデックス: $indexPath"
