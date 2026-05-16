@@ -671,18 +671,40 @@ foreach ($currentAuditPath in $foldersToProcess) {
     } else { nodata }
 
     $gpoLogon = Read-JsonSafe (Join-Path $currentAuditPath '10i_gpo_logon_scripts.json')
-    h3 'ログオン/ログオフスクリプト (GPO レジストリ)'
+    h3 'ログオン/ログオフ/スタートアップ/シャットダウンスクリプト (GPO レジストリ)'
     if ($gpoLogon) {
-        $items = @($gpoLogon) | Where-Object { $_.ScriptPath }
+        $items = @($gpoLogon) | Where-Object { $_.Script }
         if ($items.Count -gt 0) {
-            ln '| 種別 | スクリプト |'
-            ln '|------|----------|'
-            foreach ($g in $items) { ln "| $(fesc $g.Type) | $(fesc $g.ScriptPath) |" }
-        } else { ln '(ログオン/ログオフスクリプトなし)' }
+            ln '| 種別 | スクリプト | パラメーター |'
+            ln '|------|----------|------------|'
+            foreach ($g in $items) { ln "| $(fesc $g.Category) | $(fesc $g.Script) | $(fesc $g.Parameters '(なし)') |" }
+        } else { ln '(スクリプトなし)' }
     } else {
         ln ''
         ln '(データなし - レジストリキー未設定)'
     }
+
+    $scriptsIni = Read-JsonSafe (Join-Path $currentAuditPath '10i7_gpo_scripts_ini.json')
+    h3 'GPO scripts.ini（スクリプト実行根拠）'
+    if ($scriptsIni) {
+        $rows = [System.Collections.Generic.List[string]]::new()
+        foreach ($scopeProp in $scriptsIni.PSObject.Properties) {
+            $scope     = $scopeProp.Name
+            $scopeData = $scopeProp.Value
+            if (-not $scopeData) { continue }
+            foreach ($sectionProp in $scopeData.PSObject.Properties) {
+                $section = $sectionProp.Name
+                foreach ($entry in @($sectionProp.Value)) {
+                    $rows.Add("| $scope | $section | $(fesc $entry.CmdLine) | $(fesc $entry.Parameters '(なし)') |")
+                }
+            }
+        }
+        if ($rows.Count -gt 0) {
+            ln '| スコープ | 種別 | スクリプト | パラメーター |'
+            ln '|---------|------|----------|------------|'
+            foreach ($row in $rows) { ln $row }
+        } else { ln '(スクリプトエントリなし)' }
+    } else { nodata }
 
     $folderRedir = Read-JsonSafe (Join-Path $currentAuditPath '10i3_folder_redirection.json')
     h3 'フォルダリダイレクト (シェルフォルダ)'

@@ -12,7 +12,8 @@
       "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\kshinjo\\\\work\\\\gather_facts\\\\WindowsEnvAudit_win11\" -Filter \"*.json\")",
       "Bash(Select-Object Name)",
       "Bash(Sort-Object Name)",
-      "PowerShell(Select-String *)"
+      "PowerShell(Select-String *)",
+      "PowerShell(cmd /c \"dir C:\\\\Windows\\\\System32\\\\GroupPolicy\\\\Machine\\\\Scripts\\\\ 2>&1\")"
     ]
   }
 }

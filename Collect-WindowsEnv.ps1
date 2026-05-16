@@ -1164,6 +1164,58 @@ $f = Save-Json "10i2_user_gpo_logon_scripts.json" $userGpoScripts $userGpoScript
 Append-Index "10i2. ユーザー側 GPO ログオン・ログオフスクリプト (HKCU)" $f
 
 # ─────────────────────────────────────────────
+# 10i7. GPO scripts.ini（スクリプト実行根拠ファイル）
+# レジストリではなくこのファイルが gpsvc の実行根拠となる
+# ─────────────────────────────────────────────
+function Parse-ScriptsIni {
+    param([string]$Path)
+    if (-not (Test-Path $Path)) { return $null }
+    # scripts.ini は Unicode (UTF-16 LE) で書かれる
+    $lines = Get-Content -Path $Path -Encoding Unicode -ErrorAction SilentlyContinue
+    if (-not $lines) { $lines = Get-Content -Path $Path -Encoding UTF8 -ErrorAction SilentlyContinue }
+    if (-not $lines) { return $null }
+
+    $sections = [ordered]@{}
+    $currentSection = $null
+    foreach ($line in $lines) {
+        if ($line -match '^\[(.+)\]') {
+            $currentSection = $Matches[1]
+            if (-not $sections.ContainsKey($currentSection)) { $sections[$currentSection] = [ordered]@{} }
+        } elseif ($currentSection -and $line -match '^(\d+)(CmdLine|Parameters)=(.*)') {
+            $idx = $Matches[1]; $key = $Matches[2]; $val = $Matches[3]
+            if (-not $sections[$currentSection].ContainsKey($idx)) { $sections[$currentSection][$idx] = [ordered]@{} }
+            $sections[$currentSection][$idx][$key] = $val
+        }
+    }
+
+    $result = [ordered]@{}
+    foreach ($section in $sections.Keys) {
+        $result[$section] = @(
+            $sections[$section].Keys | Sort-Object | ForEach-Object {
+                [ordered]@{
+                    CmdLine    = $sections[$section][$_]['CmdLine']
+                    Parameters = $sections[$section][$_]['Parameters']
+                }
+            }
+        )
+    }
+    return $result
+}
+
+$scriptsIniResult = [ordered]@{}
+$machineIni = Parse-ScriptsIni "$env:SystemRoot\System32\GroupPolicy\Machine\Scripts\scripts.ini"
+$userIni    = Parse-ScriptsIni "$env:SystemRoot\System32\GroupPolicy\User\Scripts\scripts.ini"
+if ($machineIni) { $scriptsIniResult['Machine'] = $machineIni }
+if ($userIni)    { $scriptsIniResult['User']    = $userIni }
+
+$scriptsIniReason = if ($scriptsIniResult.Count -eq 0) {
+    'Machine・User いずれの scripts.ini も存在しないか読み取れません。GPO スクリプトが未設定の可能性があります。'
+} else { $null }
+
+$f = Save-Json "10i7_gpo_scripts_ini.json" $(if ($scriptsIniResult.Count -gt 0) { $scriptsIniResult } else { $null }) $scriptsIniReason
+Append-Index "10i7. GPO scripts.ini（スクリプト実行根拠）" $f
+
+# ─────────────────────────────────────────────
 # 10i3. フォルダリダイレクト
 # ─────────────────────────────────────────────
 $shellFolderKeys = @(
