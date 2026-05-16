@@ -542,26 +542,21 @@ foreach ($currentAuditPath in $foldersToProcess) {
 
     $dev = Read-JsonSafe (Join-Path $currentAuditPath '06_dev_tools.json')
     if ($dev) {
-        ln '| ツール | バージョン / 詳細 |'
-        ln '|--------|----------------|'
+        $script:devRowBuf = [System.Collections.Generic.List[string]]::new()
 
         function devrow {
             param([string]$Label, [object]$Val)
-            $disp = if ($null -eq $Val) { '-' }
-                    elseif ("$Val".Trim() -eq '') { '(インストール済み)' }
-                    else { fesc $Val }
-            $script:lines.Add("| $Label | $disp |")
+            if ($null -eq $Val -or "$Val".Trim() -eq '') { return }
+            $script:devRowBuf.Add("| $Label | $(fesc $Val) |")
         }
 
         $ps = $dev.PowerShell
-        if ($ps) { ln "| PowerShell | $(fv $ps.PSVersion) ($(fv $ps.Edition)) |" }
+        if ($ps) { $script:devRowBuf.Add("| PowerShell | $(fv $ps.PSVersion) ($(fv $ps.Edition)) |") }
 
         $dn = $dev.DotNet
         if ($dn -and $dn.Runtimes -and @($dn.Runtimes).Count -gt 0) {
             $runtimes = (@($dn.Runtimes) | ForEach-Object { ($_ -split '\[')[0].Trim() }) -join '; '
-            ln "| .NET ランタイム | $(fesc $runtimes -MaxLen 120) |"
-        } else {
-            ln '| .NET ランタイム | - |'
+            $script:devRowBuf.Add("| .NET ランタイム | $(fesc $runtimes -MaxLen 120) |")
         }
 
         devrow 'Node.js'         ($dev.Node.node)
@@ -584,6 +579,15 @@ foreach ($currentAuditPath in $foldersToProcess) {
         devrow 'terraform'       ($dev.OtherTools.terraform)
         devrow 'az (Azure CLI)'  ($dev.OtherTools.az)
         devrow 'aws (AWS CLI)'   ($dev.OtherTools.aws)
+
+        if ($script:devRowBuf.Count -gt 0) {
+            ln '| ツール | バージョン / 詳細 |'
+            ln '|--------|----------------|'
+            foreach ($row in $script:devRowBuf) { ln $row }
+        } else {
+            ln ''
+            ln '(インストール済みの開発ツールなし)'
+        }
     } else { nodata }
 
     $psModules = Read-JsonSafe (Join-Path $currentAuditPath '06d_powershell_modules.json')
