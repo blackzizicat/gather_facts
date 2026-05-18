@@ -89,7 +89,7 @@ if ($isServer -and $isAdmin -and $serverRoles) {
 $osEditionLabel = if ($isServer) { 'Windows Server 環境' } else { 'Windows 環境' }
 $indexLines = @("# $osEditionLabel 調査レポート", "生成日時: $(Get-Date)", "実行ユーザー: $env:USERNAME", "管理者権限: $isAdmin", "出力先: $outDir", "")
 $progress   = 0
-$total      = 21 + $serverStepCount
+$total      = 22 + $serverStepCount
 
 function Write-Step {
     param($n, [string]$name)
@@ -2101,6 +2101,27 @@ $f = Save-Json "20_scripts_manifest.json" $scriptManifest
 Append-Index "20. スクリプト・バッチファイル実体（コピー先: 20_scripts/）" $f
 
 # ─────────────────────────────────────────────
+# 21. スタートメニューレイアウト
+# ─────────────────────────────────────────────
+Write-Step 21 "スタートメニューレイアウト"
+
+$startLayoutFile = Join-Path $outDir "21_start_layout.xml"
+try {
+    Export-StartLayout -Path $startLayoutFile -ErrorAction Stop
+} catch {
+    $errMsg = $_
+    @"
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  データなし
+  理由: Export-StartLayout が利用できないか失敗しました: $errMsg
+  記録日時: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+-->
+"@ | Set-Content -Path $startLayoutFile -Encoding UTF8
+}
+Append-Index "21. スタートメニューレイアウト（XML）" $startLayoutFile
+
+# ─────────────────────────────────────────────
 # S01〜S08. サーバー専用ステップ
 #           Windows Server & 管理者権限 & 役割検出済みの場合のみ実行
 # ─────────────────────────────────────────────
@@ -2496,7 +2517,7 @@ if ($isServer -and $isAdmin -and $serverRoles) {
 # ─────────────────────────────────────────────
 # 22. 完了
 # ─────────────────────────────────────────────
-Write-Step 21 "完了"
+Write-Step 22 "完了"
 
 # ─────────────────────────────────────────────
 # インデックスファイル生成
