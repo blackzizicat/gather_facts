@@ -1769,6 +1769,19 @@ $printers = try {
 $f = Save-Json "17b_printers.json" $printers
 Append-Index "17b. プリンター" $f
 
+# 既定プリンター（HKCU・ユーザー単位）＋ Windows による既定プリンター管理設定
+$defaultPrinterName = $null
+try { $defaultPrinterName = (Get-CimInstance Win32_Printer -ErrorAction SilentlyContinue | Where-Object { $_.Default } | Select-Object -First 1).Name } catch { }
+$winMgr    = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows NT\CurrentVersion\Windows' -Name 'LegacyDefaultPrinterMode' -ErrorAction SilentlyContinue).LegacyDefaultPrinterMode
+$deviceReg = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows NT\CurrentVersion\Windows' -Name 'Device' -ErrorAction SilentlyContinue).Device
+$defaultPrinter = [ordered]@{
+    DefaultPrinter          = $defaultPrinterName
+    LetWindowsManageDefault = ($winMgr -ne 1)
+    DeviceRegistry          = $deviceReg
+}
+$f = Save-Json "17c_default_printer.json" $defaultPrinter
+Append-Index "17c. 既定プリンター" $f
+
 # ─────────────────────────────────────────────
 # 18. シェル・ターミナル設定
 # ─────────────────────────────────────────────
@@ -1822,6 +1835,162 @@ $shellSettings = [ordered]@{
 }
 $f = Save-Json "18c_shell_settings.json" $shellSettings
 Append-Index "18c. シェル・エクスプローラー設定" $f
+
+# 既定アプリ（関連付け）— URL プロトコル / ファイル拡張子の UserChoice ProgId
+# --- ProgId フレンドリ名解決（デスクトップ ProgId + AppX/UWP 対応）---
+if (-not ('Win32.IndStr' -as [type])) {
+    try {
+        Add-Type -Namespace Win32 -Name IndStr -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("shlwapi.dll", CharSet=System.Runtime.InteropServices.CharSet.Unicode)]
+public static extern int SHLoadIndirectString(string pszSource, System.Text.StringBuilder pszOutBuf, int cchOutBuf, System.IntPtr ppvReserved);
+'@ -ErrorAction SilentlyContinue
+    } catch { }
+}
+function Resolve-IndirectString($s) {
+    if (-not $s) { return $null }
+    if ($s -notlike '@{*') { return $s }
+    if ('Win32.IndStr' -as [type]) {
+        try {
+            $sb = New-Object System.Text.StringBuilder 1024
+            if ([Win32.IndStr]::SHLoadIndirectString($s, $sb, $sb.Capacity, [IntPtr]::Zero) -eq 0 -and $sb.Length -gt 0) { return $sb.ToString() }
+        } catch { }
+    }
+    return $null
+}
+$script:StartAppsMap = $null
+function Get-StartAppsMap {
+    if ($null -ne $script:StartAppsMap) { return $script:StartAppsMap }
+    $m = @{}
+    try { Get-StartApps -ErrorAction SilentlyContinue | ForEach-Object { if ($_.AppID -and -not $m.ContainsKey($_.AppID)) { $m[$_.AppID] = $_.Name } } } catch { }
+    $script:StartAppsMap = $m
+    return $m
+}
+function Resolve-ProgIdFriendly($progId) {
+    if (-not $progId) { return $null }
+    $base = "Registry::HKEY_CLASSES_ROOT\$progId"
+    if ($progId -like 'AppX*') {
+        $appName  = (Get-ItemProperty "$base\Application" -Name ApplicationName -ErrorAction SilentlyContinue).ApplicationName
+        $resolved = Resolve-IndirectString $appName
+        if ($resolved) { return $resolved }
+        $aumid = (Get-ItemProperty "$base\Application" -Name AppUserModelID -ErrorAction SilentlyContinue).AppUserModelID
+        if ($aumid) {
+            $map = Get-StartAppsMap
+            if ($map.ContainsKey($aumid)) { return $map[$aumid] }
+            return ($aumid -split '!')[0]
+        }
+        return $progId
+    }
+    $name = (Get-ItemProperty $base -ErrorAction SilentlyContinue).'(default)'
+    if (-not $name) { $name = (Get-ItemProperty $base -Name 'FriendlyTypeName' -ErrorAction SilentlyContinue).FriendlyTypeName }
+    $ind = Resolve-IndirectString $name
+    if ($ind) { return $ind }
+    return $name
+}
+
+$urlAssoc = @()
+$urlRoot = 'HKCU:\Software\Microsoft\Windows\Shell\Associations\UrlAssociations'
+if (Test-Path $urlRoot) {
+    Get-ChildItem $urlRoot -ErrorAction SilentlyContinue | Sort-Object PSChildName | ForEach-Object {
+        $proto  = $_.PSChildName
+        $progId = (Get-ItemProperty "$($_.PSPath)\UserChoice" -ErrorAction SilentlyContinue).ProgId
+        if ($progId) { $urlAssoc += [ordered]@{ Protocol = $proto; ProgId = $progId; App = (Resolve-ProgIdFriendly $progId) } }
+    }
+}
+
+$extAssoc = @()
+$extRoot = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts'
+if (Test-Path $extRoot) {
+    Get-ChildItem $extRoot -ErrorAction SilentlyContinue | Sort-Object PSChildName | ForEach-Object {
+        $ext    = $_.PSChildName
+        $progId = (Get-ItemProperty "$($_.PSPath)\UserChoice" -ErrorAction SilentlyContinue).ProgId
+        if ($progId) { $extAssoc += [ordered]@{ Extension = $ext; ProgId = $progId; App = (Resolve-ProgIdFriendly $progId) } }
+    }
+}
+
+$defaultApps = [ordered]@{
+    UrlAssociations = $urlAssoc
+    FileExtensions  = $extAssoc
+}
+$f = Save-Json "18e_default_app_associations.json" $defaultApps
+Append-Index "18e. 既定アプリ（関連付け）" $f
+
+# システム既定の関連付けを DISM で XML エクスポート（参照用・管理者時のみ）
+$dismXml = Join-Path $outDir "18f_default_app_associations_dism.xml"
+try {
+    & Dism.exe /Online /Export-DefaultAppAssociations:"$dismXml" 2>&1 | Out-Null
+    if (Test-Path $dismXml) { Append-Index "18f. 既定アプリ関連付け（DISM エクスポート）" $dismXml }
+} catch { }
+
+# === 既定プリンター・既定アプリ（全ユーザー・各 NTUSER.DAT をロードして取得）===
+function Get-AuditUserHives {
+    $hives = @()
+    $loadedSids = @(Get-ChildItem 'Registry::HKEY_USERS' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty PSChildName)
+    $sidByPath = @{}
+    Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList' -ErrorAction SilentlyContinue | ForEach-Object {
+        $pp = (Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue).ProfileImagePath
+        if ($pp) { $sidByPath[$pp.ToLower()] = $_.PSChildName }
+    }
+    Get-ChildItem 'C:\Users' -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+        $pp  = $_.FullName
+        $dat = Join-Path $pp 'NTUSER.DAT'
+        if (-not (Test-Path $dat)) { return }
+        $sid = $sidByPath[$pp.ToLower()]
+        $entry = [ordered]@{ User = $_.Name; SID = $sid; ProfilePath = $pp; HiveRoot = $null; TempKey = $null }
+        if ($sid -and ($loadedSids -contains $sid)) {
+            $entry.HiveRoot = "Registry::HKEY_USERS\$sid"
+        } else {
+            $tmp = 'AUDIT_' + ($_.Name -replace '[^A-Za-z0-9]','_')
+            $null = reg load "HKU\$tmp" "$dat" 2>&1
+            if ($LASTEXITCODE -eq 0) { $entry.HiveRoot = "Registry::HKEY_USERS\$tmp"; $entry.TempKey = $tmp }
+        }
+        if ($entry.HiveRoot) { $hives += $entry }
+    }
+    return $hives
+}
+
+$perUserPrinters = @()
+$perUserApps     = @()
+$auditHives = @(Get-AuditUserHives)
+foreach ($h in $auditHives) {
+    $root   = $h.HiveRoot
+    $winKey = "$root\Software\Microsoft\Windows NT\CurrentVersion\Windows"
+    $dev    = (Get-ItemProperty $winKey -Name 'Device' -ErrorAction SilentlyContinue).Device
+    $mode   = (Get-ItemProperty $winKey -Name 'LegacyDefaultPrinterMode' -ErrorAction SilentlyContinue).LegacyDefaultPrinterMode
+    $perUserPrinters += [ordered]@{
+        User = $h.User; SID = $h.SID
+        DefaultPrinter = if ($dev) { ($dev -split ',')[0] } else { $null }
+        LetWindowsManageDefault = ($mode -ne 1)
+        DeviceRegistry = $dev
+    }
+    $url = @()
+    $urlRoot = "$root\Software\Microsoft\Windows\Shell\Associations\UrlAssociations"
+    if (Test-Path $urlRoot) {
+        Get-ChildItem $urlRoot -ErrorAction SilentlyContinue | Sort-Object PSChildName | ForEach-Object {
+            $progId = (Get-ItemProperty "$($_.PSPath)\UserChoice" -ErrorAction SilentlyContinue).ProgId
+            if ($progId) { $url += [ordered]@{ Protocol = $_.PSChildName; ProgId = $progId; App = (Resolve-ProgIdFriendly $progId) } }
+        }
+    }
+    $ext = @()
+    $extRoot = "$root\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts"
+    if (Test-Path $extRoot) {
+        Get-ChildItem $extRoot -ErrorAction SilentlyContinue | Sort-Object PSChildName | ForEach-Object {
+            $progId = (Get-ItemProperty "$($_.PSPath)\UserChoice" -ErrorAction SilentlyContinue).ProgId
+            if ($progId) { $ext += [ordered]@{ Extension = $_.PSChildName; ProgId = $progId; App = (Resolve-ProgIdFriendly $progId) } }
+        }
+    }
+    $perUserApps += [ordered]@{ User = $h.User; SID = $h.SID; UrlAssociations = $url; FileExtensions = $ext }
+}
+foreach ($h in $auditHives) {
+    if ($h.TempKey) {
+        [gc]::Collect(); [gc]::WaitForPendingFinalizers(); Start-Sleep -Milliseconds 200
+        $null = reg unload "HKU\$($h.TempKey)" 2>&1
+        if ($LASTEXITCODE -ne 0) { Start-Sleep -Milliseconds 500; [gc]::Collect(); $null = reg unload "HKU\$($h.TempKey)" 2>&1 }
+    }
+}
+$f = Save-Json "17d_default_printer_per_user.json" $perUserPrinters
+Append-Index "17d. 既定プリンター（全ユーザー）" $f
+$f = Save-Json "18g_default_app_associations_per_user.json" $perUserApps
+Append-Index "18g. 既定アプリ（全ユーザー・関連付け）" $f
 
 # 証明書（追加されたカスタム証明書）
 $certStores = @('Cert:\LocalMachine\My', 'Cert:\LocalMachine\Root', 'Cert:\CurrentUser\My')

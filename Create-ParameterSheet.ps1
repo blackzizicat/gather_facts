@@ -790,6 +790,47 @@ foreach ($currentAuditPath in $foldersToProcess) {
         }
     } else { nodata }
 
+    h3 '既定アプリ (関連付け)'
+    $appAssoc = Read-JsonSafe (Join-Path $currentAuditPath '18e_default_app_associations.json')
+    if ($appAssoc) {
+        if ($appAssoc.UrlAssociations) {
+            ln '**URL プロトコル**'
+            ln ''
+            ln '| プロトコル | 既定アプリ | ProgId |'
+            ln '|----------|----------|--------|'
+            foreach ($u in $appAssoc.UrlAssociations) {
+                ln "| $(fesc $u.Protocol) | $(fesc $u.App) | $(fesc $u.ProgId) |"
+            }
+            ln ''
+        }
+        if ($appAssoc.FileExtensions) {
+            ln '**ファイル拡張子**'
+            ln ''
+            ln '| 拡張子 | 既定アプリ | ProgId |'
+            ln '|-------|----------|--------|'
+            foreach ($e in $appAssoc.FileExtensions) {
+                ln "| $(fesc $e.Extension) | $(fesc $e.App) | $(fesc $e.ProgId) |"
+            }
+            ln ''
+        }
+    } else { nodata }
+
+    h3 '既定アプリ (ユーザー別・主要項目)'
+    $appPU = Read-JsonSafe (Join-Path $currentAuditPath '18g_default_app_associations_per_user.json')
+    if ($appPU) {
+        $pick = { param($list,$keyField,$key) $m = @($list) | Where-Object { $_.$keyField -eq $key } | Select-Object -First 1; if ($m) { if ($m.App) { $m.App } else { $m.ProgId } } }
+        ln '| ユーザー | ブラウザ (https) | メール (mailto) | PDF (.pdf) | 画像 (.png) | テキスト (.txt) |'
+        ln '|--------|---------------|--------------|----------|----------|--------------|'
+        foreach ($u in @($appPU)) {
+            $https = & $pick $u.UrlAssociations 'Protocol' 'https'
+            $mail  = & $pick $u.UrlAssociations 'Protocol' 'mailto'
+            $pdf   = & $pick $u.FileExtensions  'Extension' '.pdf'
+            $png   = & $pick $u.FileExtensions  'Extension' '.png'
+            $txt   = & $pick $u.FileExtensions  'Extension' '.txt'
+            ln "| $(fesc $u.User) | $(fesc $https) | $(fesc $mail) | $(fesc $pdf) | $(fesc $png) | $(fesc $txt) |"
+        }
+    } else { nodata }
+
     h3 'Winlogon (ログオンシェル)'
     if ($profPolicy) {
         $wlProp = $profPolicy.PSObject.Properties | Where-Object { $_.Name -match 'Winlogon' } | Select-Object -First 1
@@ -937,6 +978,27 @@ foreach ($currentAuditPath in $foldersToProcess) {
             ln "| $(fesc $p.Name) | $(fesc $p.DriverName) | $(fesc $p.PortName) | $shared |"
         }
     } else { nodata }
+    h3 '既定プリンター'
+    $defPrn = Read-JsonSafe (Join-Path $currentAuditPath '17c_default_printer.json')
+    if ($defPrn) {
+        ln '| 項目 | 値 |'
+        ln '|------|-----|'
+        ln "| 既定プリンター | $(fesc $defPrn.DefaultPrinter) |"
+        ln "| Windows に既定を管理させる | $(Bool-Str $defPrn.LetWindowsManageDefault 'オン' 'オフ (固定)') |"
+        ln "| 既定プリンター (レジストリ Device) | $(fesc $defPrn.DeviceRegistry) |"
+    } else { nodata }
+    h3 '既定プリンター (ユーザー別・NTUSER.DAT)'
+    $defPrnPU = Read-JsonSafe (Join-Path $currentAuditPath '17d_default_printer_per_user.json')
+    if ($defPrnPU) {
+        ln '| ユーザー | 既定プリンター | 既定の管理 | Device (レジストリ) |'
+        ln '|--------|------------|----------|------------------|'
+        foreach ($u in @($defPrnPU)) {
+            $mng = Bool-Str $u.LetWindowsManageDefault 'オン' 'オフ (固定)'
+            ln "| $(fesc $u.User) | $(fesc $u.DefaultPrinter) | $mng | $(fesc $u.DeviceRegistry) |"
+        }
+    } else { nodata }
+
+
 
     # ═══════════════════════════════════════════════════════
     # 18. デバイスドライバー
